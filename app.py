@@ -1393,7 +1393,7 @@ with tab3:
             total_words = len(st.session_state.cv_data['ringkasan'].split())
             total_words += sum(len(exp['deskripsi'].split()) for exp in st.session_state.cv_data['pengalaman'])
             
-            st.metric("Total Words", total_words, key="word_count")
+            st.metric("Total Words", total_words)
             
             if total_words < 300:
                 st.warning("CV might be too short")
