@@ -143,17 +143,9 @@ def generate_pdf_enhanced(data, settings):
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     
-    if settings['theme'] == 'dark':
-        pdf.set_fill_color(40, 40, 40)
-        pdf.rect(0, 0, 210, 297, 'F')
-    
     font = settings['font_family']
     r_prim, g_prim, b_prim = hex_to_rgb(settings['base_color'])
     r_sec, g_sec, b_sec = hex_to_rgb(settings['accent_color'])
-    
-    # Add watermark for premium templates
-    if settings['template_style'] in ['executive', 'creative']:
-        pdf.add_watermark("PRO CV")
     
     # EXECUTIVE TEMPLATE
     if settings['template_style'] == 'executive':
@@ -219,7 +211,6 @@ def generate_pdf_enhanced(data, settings):
         pdf.set_font(font, '', 10)
         pdf.set_text_color(0, 0, 0)
         for skill in data['keahlian']:
-            # Skill with bullet
             pdf.cell(85, 6, f"• {skill}", ln=True)
         
         pdf.ln(5)
@@ -267,13 +258,13 @@ def generate_pdf_enhanced(data, settings):
             data['personal_info']['alamat']
         ]
         
-        pdf.set_fill_color(240, 240, 240)
-        for contact in contact_info:
+        for i, contact in enumerate(contact_info):
             if contact:
                 pdf.set_font(font, '', 10)
                 pdf.set_text_color(0, 0, 0)
                 pdf.cell(55, 8, contact, border=1, fill=True, ln=False)
-                pdf.cell(5)  # Spacing
+                if i < len(contact_info) - 1:
+                    pdf.cell(5)  # Spacing
         
         pdf.ln(15)
         
@@ -312,25 +303,59 @@ def generate_pdf_enhanced(data, settings):
             pdf.multi_cell(0, 5, exp['deskripsi'])
             pdf.ln(5)
     
+    # DEFAULT TEMPLATE (modern_sidebar)
     else:
-        # Default to modern_sidebar from original code (simplified)
-        generate_pdf_v2(data, settings, pdf)
-    
-    buffer = io.BytesIO()
-    pdf.output(buffer)
-    buffer.seek(0)
-    return buffer
-
-def generate_pdf_v2(data, settings, pdf=None):
-    if pdf is None:
-        pdf = FPDF()
-        pdf.add_page()
-    
-    # ... (rest of your original generate_pdf_v2 function)
-    # Returning simplified version for brevity
-    font = settings['font_family']
-    pdf.set_font(font, 'B', 24)
-    pdf.cell(0, 10, data['personal_info']['nama'], ln=True)
+        # Simple default template
+        pdf.set_font(font, 'B', 24)
+        pdf.set_text_color(r_prim, g_prim, b_prim)
+        pdf.cell(0, 10, data['personal_info']['nama'], ln=True)
+        
+        if data['personal_info']['posisi_target']:
+            pdf.set_font(font, 'B', 14)
+            pdf.set_text_color(r_sec, g_sec, b_sec)
+            pdf.cell(0, 8, data['personal_info']['posisi_target'], ln=True)
+        
+        pdf.ln(5)
+        
+        # Contact info
+        pdf.set_font(font, '', 10)
+        pdf.set_text_color(100, 100, 100)
+        contact_items = []
+        if data['personal_info']['email']: contact_items.append(data['personal_info']['email'])
+        if data['personal_info']['telepon']: contact_items.append(data['personal_info']['telepon'])
+        if data['personal_info']['alamat']: contact_items.append(data['personal_info']['alamat'])
+        
+        pdf.cell(0, 6, " | ".join(contact_items), ln=True)
+        pdf.ln(10)
+        
+        # Summary
+        if data['ringkasan']:
+            pdf.set_font(font, 'B', 12)
+            pdf.set_text_color(0, 0, 0)
+            pdf.cell(0, 8, "PROFESSIONAL SUMMARY", ln=True)
+            pdf.set_font(font, '', settings['font_size_body'])
+            pdf.multi_cell(0, 5, data['ringkasan'])
+            pdf.ln(10)
+        
+        # Experience
+        if data['pengalaman']:
+            pdf.set_font(font, 'B', 12)
+            pdf.set_text_color(r_prim, g_prim, b_prim)
+            pdf.cell(0, 8, "WORK EXPERIENCE", ln=True)
+            
+            for exp in data['pengalaman']:
+                pdf.set_font(font, 'B', 11)
+                pdf.set_text_color(0, 0, 0)
+                pdf.cell(0, 6, exp['posisi'], ln=True)
+                
+                pdf.set_font(font, 'I', 10)
+                pdf.set_text_color(r_sec, g_sec, b_sec)
+                pdf.cell(0, 5, f"{exp['perusahaan']} | {exp['periode']}", ln=True)
+                
+                pdf.set_font(font, '', settings['font_size_body'])
+                pdf.set_text_color(0, 0, 0)
+                pdf.multi_cell(0, 5, exp['deskripsi'])
+                pdf.ln(3)
     
     buffer = io.BytesIO()
     pdf.output(buffer)
@@ -356,12 +381,12 @@ def generate_word_doc(data, settings):
     # Choose template style
     if settings['template_style'] == 'classic_vertical':
         generate_word_classic(doc, data, settings)
-    elif settings['template_style'] == 'modern_sidebar':
-        generate_word_modern(doc, data, settings)
     elif settings['template_style'] == 'executive':
         generate_word_executive(doc, data, settings)
+    elif settings['template_style'] == 'creative':
+        generate_word_creative(doc, data, settings)
     else:
-        generate_word_minimal(doc, data, settings)
+        generate_word_modern(doc, data, settings)
     
     # Save to BytesIO
     buffer = io.BytesIO()
@@ -375,7 +400,8 @@ def generate_word_executive(doc, data, settings):
     header = doc.add_paragraph()
     header_run = header.add_run(data['personal_info']['nama'].upper())
     header_run.font.size = Pt(28)
-    header_run.font.color.rgb = RGBColor(*hex_to_rgb(settings['base_color']))
+    r_prim, g_prim, b_prim = hex_to_rgb(settings['base_color'])
+    header_run.font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
     header_run.font.bold = True
     header.alignment = WD_ALIGN_PARAGRAPH.CENTER
     
@@ -385,7 +411,8 @@ def generate_word_executive(doc, data, settings):
         position.alignment = WD_ALIGN_PARAGRAPH.CENTER
         position_run = position.runs[0]
         position_run.font.size = Pt(14)
-        position_run.font.color.rgb = RGBColor(*hex_to_rgb(settings['accent_color']))
+        r_sec, g_sec, b_sec = hex_to_rgb(settings['accent_color'])
+        position_run.font.color.rgb = RGBColor(r_sec, g_sec, b_sec)
         position_run.italic = True
     
     # Add contact info
@@ -419,13 +446,13 @@ def generate_word_executive(doc, data, settings):
     # Summary
     left_cell.paragraphs[0].add_run("PROFESSIONAL SUMMARY").bold = True
     left_cell.paragraphs[0].runs[0].font.size = Pt(12)
-    left_cell.paragraphs[0].runs[0].font.color.rgb = RGBColor(*hex_to_rgb(settings['base_color']))
+    left_cell.paragraphs[0].runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
     left_cell.add_paragraph(data['ringkasan'])
     
     # Experience
     left_cell.add_paragraph().add_run("WORK EXPERIENCE").bold = True
     left_cell.paragraphs[-1].runs[0].font.size = Pt(12)
-    left_cell.paragraphs[-1].runs[0].font.color.rgb = RGBColor(*hex_to_rgb(settings['base_color']))
+    left_cell.paragraphs[-1].runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
     
     for exp in data['pengalaman']:
         p = left_cell.add_paragraph()
@@ -440,7 +467,7 @@ def generate_word_executive(doc, data, settings):
     # Skills
     right_cell.paragraphs[0].add_run("KEY SKILLS").bold = True
     right_cell.paragraphs[0].runs[0].font.size = Pt(12)
-    right_cell.paragraphs[0].runs[0].font.color.rgb = RGBColor(*hex_to_rgb(settings['base_color']))
+    right_cell.paragraphs[0].runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
     
     for skill in data['keahlian']:
         right_cell.add_paragraph(f"• {skill}")
@@ -448,7 +475,7 @@ def generate_word_executive(doc, data, settings):
     # Education
     right_cell.add_paragraph().add_run("EDUCATION").bold = True
     right_cell.paragraphs[-1].runs[0].font.size = Pt(12)
-    right_cell.paragraphs[-1].runs[0].font.color.rgb = RGBColor(*hex_to_rgb(settings['base_color']))
+    right_cell.paragraphs[-1].runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
     
     for edu in data['pendidikan']:
         p = right_cell.add_paragraph()
@@ -456,57 +483,16 @@ def generate_word_executive(doc, data, settings):
         p.add_run(f"{edu['gelar']} | {edu['tahun']}")
         p.paragraph_format.space_after = Pt(6)
 
-def generate_word_modern(doc, data, settings):
-    """Modern sidebar style Word document"""
-    # Create table for sidebar layout
-    table = doc.add_table(rows=1, cols=2)
-    table.autofit = False
-    table.columns[0].width = Inches(2)
-    table.columns[1].width = Inches(5)
-    
-    # Left column (Sidebar) - Add colored background
-    left_cell = table.cell(0, 0)
-    # Set cell background color (Word doesn't support direct background color easily)
-    # We'll use shading instead
-    shading_elm = OxmlElement('w:shd')
-    shading_elm.set(qn('w:fill'), settings['base_color'].replace('#', ''))
-    left_cell._tc.get_or_add_tcPr().append(shading_elm)
-    
-    # Add name to sidebar
-    name_para = left_cell.paragraphs[0]
-    name_run = name_para.add_run(data['personal_info']['nama'][:15].upper() + "..." if len(data['personal_info']['nama']) > 15 else data['personal_info']['nama'].upper())
-    name_run.font.color.rgb = RGBColor(255, 255, 255)
-    name_run.font.bold = True
-    name_run.font.size = Pt(14)
-    
-    # Add contact to sidebar
-    contact_items = []
-    if data['personal_info']['email']: contact_items.append(data['personal_info']['email'])
-    if data['personal_info']['telepon']: contact_items.append(data['personal_info']['telepon'])
-    
-    for item in contact_items:
-        p = left_cell.add_paragraph(item[:20] + "..." if len(item) > 20 else item)
-        p.runs[0].font.color.rgb = RGBColor(255, 255, 255)
-        p.runs[0].font.size = Pt(9)
-    
-    # Right column - Main content
-    right_cell = table.cell(0, 1)
-    
-    # Professional Summary
-    right_cell.paragraphs[0].add_run("Professional Summary").bold = True
-    right_cell.paragraphs[0].runs[0].font.size = Pt(14)
-    right_cell.paragraphs[0].runs[0].font.color.rgb = RGBColor(*hex_to_rgb(settings['base_color']))
-    right_cell.add_paragraph(data['ringkasan'])
-    
-    # Add other sections...
-
 def generate_word_classic(doc, data, settings):
     """Classic ATS-friendly Word document"""
+    r_prim, g_prim, b_prim = hex_to_rgb(settings['base_color'])
+    
     # Name
     title = doc.add_paragraph(data['personal_info']['nama'].upper())
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.runs[0].bold = True
     title.runs[0].font.size = Pt(22)
+    title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
     
     # Contact info
     contact = doc.add_paragraph()
@@ -524,11 +510,18 @@ def generate_word_classic(doc, data, settings):
     doc.add_paragraph().add_run().add_break()
     
     # Professional Summary
-    doc.add_paragraph("PROFESSIONAL SUMMARY").runs[0].bold = True
+    summary_title = doc.add_paragraph("PROFESSIONAL SUMMARY")
+    summary_title.runs[0].bold = True
+    summary_title.runs[0].font.size = Pt(12)
+    summary_title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
     doc.add_paragraph(data['ringkasan'])
     
     # Work Experience
-    doc.add_paragraph("WORK EXPERIENCE").runs[0].bold = True
+    exp_title = doc.add_paragraph("WORK EXPERIENCE")
+    exp_title.runs[0].bold = True
+    exp_title.runs[0].font.size = Pt(12)
+    exp_title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+    
     for exp in data['pengalaman']:
         p = doc.add_paragraph()
         p.add_run(f"{exp['posisi']}\n").bold = True
@@ -537,7 +530,11 @@ def generate_word_classic(doc, data, settings):
         p.paragraph_format.space_after = Pt(6)
     
     # Education
-    doc.add_paragraph("EDUCATION").runs[0].bold = True
+    edu_title = doc.add_paragraph("EDUCATION")
+    edu_title.runs[0].bold = True
+    edu_title.runs[0].font.size = Pt(12)
+    edu_title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+    
     for edu in data['pendidikan']:
         p = doc.add_paragraph()
         p.add_run(f"{edu['institusi']}\n").bold = True
@@ -545,49 +542,125 @@ def generate_word_classic(doc, data, settings):
         p.paragraph_format.space_after = Pt(6)
     
     # Skills
-    doc.add_paragraph("SKILLS").runs[0].bold = True
+    skills_title = doc.add_paragraph("SKILLS")
+    skills_title.runs[0].bold = True
+    skills_title.runs[0].font.size = Pt(12)
+    skills_title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+    
     skills_text = ", ".join(data['keahlian'])
     doc.add_paragraph(skills_text)
 
-def generate_word_minimal(doc, data, settings):
-    """Minimalist Word document"""
-    # Simple minimalist design
-    # Name
-    name = doc.add_paragraph(data['personal_info']['nama'])
-    name.runs[0].bold = True
-    name.runs[0].font.size = Pt(16)
+def generate_word_modern(doc, data, settings):
+    """Modern sidebar style Word document"""
+    r_prim, g_prim, b_prim = hex_to_rgb(settings['base_color'])
+    
+    # Create table for layout
+    table = doc.add_table(rows=1, cols=2)
+    table.autofit = False
+    table.columns[0].width = Inches(2)
+    table.columns[1].width = Inches(5)
+    
+    # Left column (Sidebar)
+    left_cell = table.cell(0, 0)
+    
+    # Name in sidebar
+    name_para = left_cell.paragraphs[0]
+    name_run = name_para.add_run(data['personal_info']['nama'][:15].upper() + "..." if len(data['personal_info']['nama']) > 15 else data['personal_info']['nama'].upper())
+    name_run.font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+    name_run.font.bold = True
+    name_run.font.size = Pt(14)
+    
+    # Add contact to sidebar
+    contact_items = []
+    if data['personal_info']['email']: contact_items.append(data['personal_info']['email'])
+    if data['personal_info']['telepon']: contact_items.append(data['personal_info']['telepon'])
+    
+    for item in contact_items:
+        p = left_cell.add_paragraph(item[:20] + "..." if len(item) > 20 else item)
+        p.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+        p.runs[0].font.size = Pt(9)
+    
+    # Right column - Main content
+    right_cell = table.cell(0, 1)
+    
+    # Professional Summary
+    right_cell.paragraphs[0].add_run("Professional Summary").bold = True
+    right_cell.paragraphs[0].runs[0].font.size = Pt(14)
+    right_cell.paragraphs[0].runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+    right_cell.add_paragraph(data['ringkasan'])
+    
+    # Work Experience
+    right_cell.add_paragraph().add_run("Work Experience").bold = True
+    right_cell.paragraphs[-1].runs[0].font.size = Pt(14)
+    right_cell.paragraphs[-1].runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+    
+    for exp in data['pengalaman']:
+        p = right_cell.add_paragraph()
+        p.add_run(f"{exp['posisi']}\n").bold = True
+        p.add_run(f"{exp['perusahaan']} | {exp['periode']}\n").italic = True
+        p.add_run(exp['deskripsi'])
+        p.paragraph_format.space_after = Pt(6)
+
+def generate_word_creative(doc, data, settings):
+    """Creative Word document"""
+    r_prim, g_prim, b_prim = hex_to_rgb(settings['base_color'])
+    r_sec, g_sec, b_sec = hex_to_rgb(settings['accent_color'])
+    
+    # Creative header
+    header = doc.add_paragraph()
+    header_run = header.add_run(data['personal_info']['nama'])
+    header_run.font.size = Pt(36)
+    header_run.font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+    header_run.font.bold = True
     
     # Position
     if data['personal_info']['posisi_target']:
-        doc.add_paragraph(data['personal_info']['posisi_target']).runs[0].italic = True
+        position = doc.add_paragraph(data['personal_info']['posisi_target'])
+        position_run = position.runs[0]
+        position_run.font.size = Pt(18)
+        position_run.font.color.rgb = RGBColor(r_sec, g_sec, b_sec)
+        position_run.italic = True
     
-    # Contact
-    contact_info = []
-    if data['personal_info']['email']: contact_info.append(data['personal_info']['email'])
-    if data['personal_info']['telepon']: contact_info.append(data['personal_info']['telepon'])
+    doc.add_paragraph()  # Spacer
     
-    if contact_info:
-        doc.add_paragraph(" • ".join(contact_info)).runs[0].font.size = Pt(9)
-    
-    # Divider
-    doc.add_paragraph("_" * 50)
-    
-    # Content
+    # Summary with icon
+    summary_title = doc.add_paragraph("✨ ABOUT ME")
+    summary_title.runs[0].font.size = Pt(14)
+    summary_title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+    summary_title.runs[0].bold = True
     doc.add_paragraph(data['ringkasan'])
     
-    # Add other sections in simple format...
+    # Experience timeline
+    exp_title = doc.add_paragraph("📈 EXPERIENCE TIMELINE")
+    exp_title.runs[0].font.size = Pt(14)
+    exp_title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+    exp_title.runs[0].bold = True
+    
+    for exp in data['pengalaman']:
+        p = doc.add_paragraph()
+        p.add_run(f"{exp['posisi']}\n").bold = True
+        p.add_run(f"{exp['perusahaan']} • {exp['periode']}\n").italic = True
+        p.add_run(exp['deskripsi'])
+        p.paragraph_format.space_after = Pt(8)
 
 # --- HTML PREVIEW ENHANCED ---
 def get_html_preview_enhanced(data, settings):
     ats_score = calculate_ats_score(data)
+    
+    # Handle theme-specific border color
+    border_color = '#444' if settings['theme'] == 'dark' else '#eee'
+    text_color = '#fff' if settings['theme'] == 'dark' else '#333'
+    bg_color = '#1e1e1e' if settings['theme'] == 'dark' else 'white'
+    skill_bg = '#333' if settings['theme'] == 'dark' else '#f0f0f0'
+    date_color = '#aaa' if settings['theme'] == 'dark' else '#666'
     
     html = f"""
     <style>
         .cv-container {{
             max-width: 800px;
             margin: 0 auto;
-            background: {'#1e1e1e' if settings['theme'] == 'dark' else 'white'};
-            color: {'#fff' if settings['theme'] == 'dark' else '#333'};
+            background: {bg_color};
+            color: {text_color};
             box-shadow: 0 5px 25px rgba(0,0,0,0.1);
             border-radius: 10px;
             overflow: hidden;
@@ -624,7 +697,7 @@ def get_html_preview_enhanced(data, settings):
         }}
         .section {{
             padding: 25px 40px;
-            border-bottom: 1px solid {'#444' if settings['theme'] == 'dark' : '#eee'};
+            border-bottom: 1px solid {border_color};
         }}
         .section-title {{
             color: {settings['base_color']};
@@ -637,7 +710,7 @@ def get_html_preview_enhanced(data, settings):
         }}
         .skill-tag {{
             display: inline-block;
-            background: {'#333' if settings['theme'] == 'dark' : '#f0f0f0'};
+            background: {skill_bg};
             padding: 5px 15px;
             border-radius: 20px;
             margin: 5px;
@@ -671,7 +744,7 @@ def get_html_preview_enhanced(data, settings):
         }}
         .date {{
             float: right;
-            color: {'#aaa' if settings['theme'] == 'dark' : '#666'};
+            color: {date_color};
             font-size: 14px;
         }}
     </style>
@@ -1210,7 +1283,8 @@ with tab4:
                     file_name=f"CV_Package_{st.session_state.cv_data['personal_info']['nama'].replace(' ', '_')}.zip",
                     mime="application/zip",
                     type="primary",
-                    use_container_width=True
+                    use_container_width=True,
+                    key="download_zip"
                 )
         
         st.divider()
@@ -1269,19 +1343,6 @@ with tab4:
                 mime="text/plain",
                 use_container_width=True
             )
-        
-        st.divider()
-        
-        # Share options
-        st.subheader("Share & Save")
-        
-        # Save to session state for persistence
-        if st.button("💾 Save to Browser Storage", use_container_width=True):
-            st.success("CV saved to browser storage!")
-        
-        # Generate shareable link (conceptual)
-        if st.button("🔗 Generate Shareable Link", use_container_width=True):
-            st.info("This feature requires backend integration. For now, use the download options above.")
 
 # Footer
 st.markdown("---")
