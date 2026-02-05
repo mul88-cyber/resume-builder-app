@@ -1349,7 +1349,7 @@ with tab3:
         
         col_score, col_actions = st.columns([1, 3])
         with col_score:
-            st.metric("ATS Score", f"{ats_score}%", key="ats_score_display")
+            st.metric(label="ATS Score", value=f"{ats_score}%")
         
         with col_actions:
             if ats_score < 70:
