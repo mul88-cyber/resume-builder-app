@@ -11,18 +11,15 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 import base64
+import tempfile
+import os
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(
-    page_title="CV Builder Pro Ultra",
+    page_title="CV Builder Pro Ultra v2.1",
     page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items={
-        'Get Help': 'https://github.com/streamlit',
-        'Report a bug': "https://github.com/streamlit",
-        'About': "# CV Builder Pro Ultra v2.0\n### Build professional CVs with AI-powered suggestions"
-    }
+    initial_sidebar_state="expanded"
 )
 
 # --- STATE MANAGEMENT ---
@@ -31,7 +28,7 @@ if 'cv_data' not in st.session_state:
         'personal_info': {
             'nama': '', 'email': '', 'telepon': '', 'alamat': '',
             'linkedin': '', 'github': '', 'website': '', 'posisi_target': '',
-            'foto': None
+            'foto': None # Base64 string
         },
         'ringkasan': '',
         'pengalaman': [],
@@ -51,1563 +48,625 @@ if 'settings' not in st.session_state:
         'accent_color': '#1e40af',
         'font_size_body': 10,
         'font_size_header': 24,
-        'section_spacing': 5,
-        'show_icons': True,
-        'theme': 'light',
-        'ats_friendly': True
+        'theme': 'light'
     }
 
-# --- DATA TEMPLATES & PRESETS ---
+# --- DATA TEMPLATES ---
 LAYOUTS = {
     'modern_sidebar': {'name': 'Modern Sidebar', 'type': '2_column', 'ats_score': 85},
     'classic_vertical': {'name': 'ATS Professional', 'type': '1_column', 'ats_score': 95},
-    'minimal_clean': {'name': 'Minimalist Clean', 'type': '1_column_compact', 'ats_score': 80},
     'executive': {'name': 'Executive Style', 'type': '2_column', 'ats_score': 90},
     'creative': {'name': 'Creative Portfolio', 'type': 'creative', 'ats_score': 70}
 }
 
-THEME_COLORS = {
-    'professional_blue': {'primary': '#1e40af', 'secondary': '#3b82f6'},
-    'corporate_gray': {'primary': '#374151', 'secondary': '#6b7280'},
-    'green_teal': {'primary': '#0f766e', 'secondary': '#14b8a6'},
-    'purple_premium': {'primary': '#7c3aed', 'secondary': '#a78bfa'},
-    'red_passion': {'primary': '#dc2626', 'secondary': '#ef4444'}
-}
-
 FONTS = {
-    'Helvetica': {'pdf': 'Helvetica', 'docx': 'Calibri'},
+    'Helvetica': {'pdf': 'Helvetica', 'docx': 'Arial'},
     'Times': {'pdf': 'Times', 'docx': 'Times New Roman'},
-    'Arial': {'pdf': 'Arial', 'docx': 'Arial'},
-    'Georgia': {'pdf': 'Georgia', 'docx': 'Georgia'},
-    'Verdana': {'pdf': 'Verdana', 'docx': 'Verdana'}
+    'Courier': {'pdf': 'Courier', 'docx': 'Courier New'}
 }
 
 # --- FUNGSI HELPER ---
 def hex_to_rgb(hex_color):
+    """Safe Hex to RGB converter"""
     try:
         hex_color = hex_color.lstrip('#')
         if len(hex_color) == 6:
             return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
-        elif len(hex_color) == 3:
-            return tuple(int(hex_color[i:i+1]*2, 16) for i in (0, 1, 2))
-        else:
-            return (37, 99, 235)  # Default blue color
+        return (37, 99, 235) # Default Blue
     except:
-        return (37, 99, 235)  # Default blue color on error
+        return (37, 99, 235)
+
+def save_image_temp(base64_str):
+    """Decodes base64 image to a temp file for PDF/Docx inclusion"""
+    if not base64_str:
+        return None
+    try:
+        # Remove header if present (data:image/png;base64,...)
+        if "," in base64_str:
+            base64_str = base64_str.split(",")[1]
+        
+        image_data = base64.b64decode(base64_str)
+        tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+        tfile.write(image_data)
+        tfile.close()
+        return tfile.name
+    except Exception as e:
+        print(f"Error saving image: {e}")
+        return None
 
 def calculate_ats_score(data):
-    """Calculate ATS compatibility score"""
     score = 0
-    max_score = 100
-    
-    # Check required fields
     if data['personal_info']['nama']: score += 10
     if data['personal_info']['email']: score += 10
     if data['personal_info']['posisi_target']: score += 10
-    if data['ringkasan']: score += 10
-    
-    # Check experience
-    if len(data['pengalaman']) >= 1: score += 15
-    if len(data['pengalaman']) >= 3: score += 10
-    
-    # Check education
-    if len(data['pendidikan']) >= 1: score += 10
-    
-    # Check skills
-    if len(data['keahlian']) >= 5: score += 15
-    if len(data['keahlian']) >= 10: score += 10
-    
-    # Bonus for keywords
-    keywords = ['managed', 'developed', 'created', 'improved', 'increased', 'reduced']
-    summary_text = data['ringkasan'].lower()
-    for keyword in keywords:
-        if keyword in summary_text:
-            score += 5
-            break
-    
+    if data['ringkasan']: score += 15
+    if len(data['pengalaman']) >= 1: score += 20
+    if len(data['pendidikan']) >= 1: score += 15
+    if len(data['keahlian']) >= 5: score += 20
     return min(score, 100)
 
-# --- PDF GENERATOR ENHANCED ---
+# --- PDF GENERATOR ---
 class CVPDF(FPDF):
-    def header(self):
-        # Custom header for specific templates
-        pass
-    
     def footer(self):
         self.set_y(-15)
-        font_family = st.session_state.settings['font_family']
-        if font_family in FONTS:
-            font_family = FONTS[font_family]['pdf']
-        self.set_font(font_family, 'I', 8)
+        self.set_font('Helvetica', 'I', 8)
         self.set_text_color(128)
-        self.cell(0, 10, f"Generated by CV Builder Pro Ultra - Page {self.page_no()}", 0, 0, 'C')
+        self.cell(0, 10, f"Page {self.page_no()}", 0, 0, 'C')
 
 def generate_pdf_enhanced(data, settings):
     pdf = CVPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     
-    font = settings['font_family']
-    if font in FONTS:
-        font = FONTS[font]['pdf']
+    # Colors & Fonts
+    r_prim, g_prim, b_prim = hex_to_rgb(settings['base_color'])
+    r_sec, g_sec, b_sec = hex_to_rgb(settings['accent_color'])
+    font = FONTS.get(settings['font_family'], FONTS['Helvetica'])['pdf']
     
-    try:
-        r_prim, g_prim, b_prim = hex_to_rgb(settings['base_color'])
-        r_sec, g_sec, b_sec = hex_to_rgb(settings['accent_color'])
-    except:
-        r_prim, g_prim, b_prim = (37, 99, 235)  # Default blue
-        r_sec, g_sec, b_sec = (30, 64, 175)    # Default dark blue
+    # Handle Photo (Temp File)
+    temp_img_path = save_image_temp(data['personal_info']['foto'])
+
+    # === TEMPLATE LOGIC ===
     
-    # EXECUTIVE TEMPLATE
-    if settings['template_style'] == 'executive':
-        # Header with colored bar
+    # 1. MODERN SIDEBAR
+    if settings['template_style'] == 'modern_sidebar':
+        # Sidebar Background
         pdf.set_fill_color(r_prim, g_prim, b_prim)
-        pdf.rect(0, 0, 210, 40, 'F')
+        pdf.rect(0, 0, 65, 297, 'F')
         
-        # Name in header
+        # --- SIDEBAR CONTENT ---
         pdf.set_text_color(255, 255, 255)
-        pdf.set_font(font, 'B', 28)
-        pdf.set_xy(20, 12)
-        pdf.cell(0, 10, data['personal_info']['nama'].upper() if data['personal_info']['nama'] else "YOUR NAME", ln=True)
         
-        # Contact info below header
-        pdf.set_text_color(50, 50, 50)
-        pdf.set_font(font, '', 10)
-        pdf.set_xy(20, 45)
-        contact_items = []
-        if data['personal_info']['email']: contact_items.append(f"✉️ {data['personal_info']['email']}")
-        if data['personal_info']['telepon']: contact_items.append(f"📱 {data['personal_info']['telepon']}")
-        if data['personal_info']['linkedin']: contact_items.append(f"🔗 {data['personal_info']['linkedin']}")
-        pdf.cell(0, 6, "  |  ".join(contact_items) if contact_items else "Add your contact information", ln=True)
+        # Photo
+        curr_y = 20
+        if temp_img_path:
+            pdf.image(temp_img_path, x=12, y=20, w=40)
+            curr_y += 45
         
-        # Two column layout
-        pdf.set_xy(20, 60)
+        pdf.set_xy(5, curr_y)
         
-        # Left column - Summary and Experience
-        pdf.set_font(font, 'B', 16)
-        pdf.set_text_color(r_prim, g_prim, b_prim)
-        pdf.cell(85, 10, "PROFESSIONAL SUMMARY", ln=True)
-        pdf.set_font(font, '', settings['font_size_body'])
-        pdf.set_text_color(0, 0, 0)
-        pdf.multi_cell(85, 5, data['ringkasan'] if data['ringkasan'] else "Add your professional summary here.")
+        # Contact
+        pdf.set_font(font, 'B', 14)
+        pdf.cell(55, 10, "CONTACT", ln=True, align='L')
+        pdf.set_font(font, '', 9)
+        
+        contacts = [
+            data['personal_info']['email'],
+            data['personal_info']['telepon'],
+            data['personal_info']['alamat'],
+            data['personal_info']['linkedin']
+        ]
+        for item in contacts:
+            if item:
+                pdf.set_x(5)
+                pdf.multi_cell(55, 5, item)
+                pdf.ln(2)
+        
         pdf.ln(5)
         
-        # Experience
-        if data['pengalaman']:
-            pdf.set_font(font, 'B', 16)
-            pdf.set_text_color(r_prim, g_prim, b_prim)
-            pdf.cell(85, 10, "WORK EXPERIENCE", ln=True)
-            
-            for exp in data['pengalaman']:
-                pdf.set_font(font, 'B', 12)
-                pdf.set_text_color(0, 0, 0)
-                pdf.cell(85, 6, exp.get('posisi', 'Position'), ln=True)
-                
-                pdf.set_font(font, 'I', 10)
-                pdf.set_text_color(r_sec, g_sec, b_sec)
-                pdf.cell(85, 5, f"{exp.get('perusahaan', 'Company')} | {exp.get('periode', 'Period')}", ln=True)
-                
-                pdf.set_font(font, '', 9)
-                pdf.set_text_color(0, 0, 0)
-                pdf.multi_cell(85, 4, exp.get('deskripsi', 'Description'))
-                pdf.ln(2)
-        
-        # Right column - Skills, Education, etc.
-        pdf.set_xy(115, 60)
-        
-        # Skills
+        # Skills (Sidebar)
         if data['keahlian']:
-            pdf.set_font(font, 'B', 16)
-            pdf.set_text_color(r_prim, g_prim, b_prim)
-            pdf.cell(85, 10, "KEY SKILLS", ln=True)
-            
-            pdf.set_font(font, '', 10)
-            pdf.set_text_color(0, 0, 0)
+            pdf.set_x(5)
+            pdf.set_font(font, 'B', 14)
+            pdf.cell(55, 10, "SKILLS", ln=True)
+            pdf.set_font(font, '', 9)
             for skill in data['keahlian']:
-                pdf.cell(85, 6, f"• {skill}", ln=True)
-            
+                pdf.set_x(5)
+                pdf.cell(55, 6, f"- {skill}", ln=True)
+
+        # Languages (Sidebar)
+        if data['bahasa']:
             pdf.ln(5)
+            pdf.set_x(5)
+            pdf.set_font(font, 'B', 14)
+            pdf.cell(55, 10, "LANGUAGES", ln=True)
+            pdf.set_font(font, '', 9)
+            for lang in data['bahasa']:
+                pdf.set_x(5)
+                pdf.cell(55, 6, f"- {lang}", ln=True)
+
+        # --- MAIN CONTENT ---
+        pdf.set_xy(70, 20)
+        pdf.set_text_color(r_prim, g_prim, b_prim)
         
-        # Education
-        if data['pendidikan']:
-            pdf.set_font(font, 'B', 16)
-            pdf.set_text_color(r_prim, g_prim, b_prim)
-            pdf.cell(85, 10, "EDUCATION", ln=True)
-            
-            for edu in data['pendidikan']:
-                pdf.set_font(font, 'B', 11)
-                pdf.set_text_color(0, 0, 0)
-                pdf.cell(85, 6, edu.get('institusi', 'Institution'), ln=True)
-                
-                pdf.set_font(font, '', 10)
-                pdf.set_text_color(r_sec, g_sec, b_sec)
-                pdf.cell(85, 5, f"{edu.get('gelar', 'Degree')} | {edu.get('tahun', 'Year')}", ln=True)
-                pdf.ln(2)
-    
-    # CREATIVE TEMPLATE
-    elif settings['template_style'] == 'creative':
-        # Modern creative design
-        pdf.set_fill_color(r_prim, g_prim, b_prim)
-        pdf.rect(0, 0, 210, 80, 'F')
-        
-        # Name with large font
-        pdf.set_text_color(255, 255, 255)
-        pdf.set_font(font, 'B', 36)
-        pdf.set_xy(20, 30)
-        pdf.cell(0, 15, data['personal_info']['nama'] if data['personal_info']['nama'] else "YOUR NAME", ln=True)
+        # Name
+        pdf.set_font(font, 'B', 28)
+        pdf.cell(0, 10, data['personal_info']['nama'].upper(), ln=True)
         
         # Position
         if data['personal_info']['posisi_target']:
-            pdf.set_font(font, 'I', 18)
-            pdf.set_text_color(255, 255, 200)
-            pdf.set_x(20)
-            pdf.cell(0, 10, data['personal_info']['posisi_target'], ln=True)
-        
-        # Main content
-        pdf.set_xy(20, 90)
-        
-        # Contact in creative boxes
-        contact_info = [
-            data['personal_info']['email'],
-            data['personal_info']['telepon'],
-            data['personal_info']['alamat']
-        ]
-        
-        valid_contacts = [c for c in contact_info if c]
-        for i, contact in enumerate(valid_contacts):
-            pdf.set_font(font, '', 10)
-            pdf.set_text_color(0, 0, 0)
-            pdf.cell(55, 8, contact, border=1, fill=True, ln=False)
-            if i < len(valid_contacts) - 1:
-                pdf.cell(5)  # Spacing
-        
-        if valid_contacts:
-            pdf.ln(15)
-        else:
-            pdf.ln(5)
-        
-        # Summary with icon
-        if data['ringkasan']:
-            pdf.set_font(font, 'B', 14)
-            pdf.set_text_color(r_prim, g_prim, b_prim)
-            pdf.cell(0, 8, "✨ ABOUT ME", ln=True)
-            pdf.set_font(font, '', 11)
-            pdf.set_text_color(0, 0, 0)
-            pdf.multi_cell(0, 5, data['ringkasan'])
-            pdf.ln(10)
-        
-        # Experience in timeline style
-        if data['pengalaman']:
-            pdf.set_font(font, 'B', 14)
-            pdf.set_text_color(r_prim, g_prim, b_prim)
-            pdf.cell(0, 8, "📈 EXPERIENCE TIMELINE", ln=True)
-            
-            for i, exp in enumerate(data['pengalaman']):
-                # Timeline dot
-                pdf.set_fill_color(r_prim, g_prim, b_prim)
-                pdf.circle(25, pdf.get_y() + 5, 2, style='F')
-                
-                pdf.set_font(font, 'B', 12)
-                pdf.set_text_color(0, 0, 0)
-                pdf.set_x(35)
-                pdf.cell(0, 6, exp.get('posisi', 'Position'), ln=True)
-                
-                pdf.set_font(font, 'I', 10)
-                pdf.set_text_color(100, 100, 100)
-                pdf.set_x(35)
-                pdf.cell(0, 5, f"{exp.get('perusahaan', 'Company')} • {exp.get('periode', 'Period')}", ln=True)
-                
-                pdf.set_font(font, '', 10)
-                pdf.set_text_color(0, 0, 0)
-                pdf.set_x(35)
-                pdf.multi_cell(0, 5, exp.get('deskripsi', 'Description'))
-                pdf.ln(5)
-    
-    # DEFAULT TEMPLATE (modern_sidebar and others)
-    else:
-        # Simple default template
-        pdf.set_font(font, 'B', 24)
-        pdf.set_text_color(r_prim, g_prim, b_prim)
-        pdf.cell(0, 10, data['personal_info']['nama'] if data['personal_info']['nama'] else "YOUR NAME", ln=True)
-        
-        if data['personal_info']['posisi_target']:
-            pdf.set_font(font, 'B', 14)
+            pdf.set_font(font, 'B', 16)
             pdf.set_text_color(r_sec, g_sec, b_sec)
-            pdf.cell(0, 8, data['personal_info']['posisi_target'], ln=True)
+            pdf.cell(0, 10, data['personal_info']['posisi_target'], ln=True)
         
         pdf.ln(5)
         
-        # Contact info
-        pdf.set_font(font, '', 10)
-        pdf.set_text_color(100, 100, 100)
-        contact_items = []
-        if data['personal_info']['email']: contact_items.append(data['personal_info']['email'])
-        if data['personal_info']['telepon']: contact_items.append(data['personal_info']['telepon'])
-        if data['personal_info']['alamat']: contact_items.append(data['personal_info']['alamat'])
-        
-        if contact_items:
-            pdf.cell(0, 6, " | ".join(contact_items), ln=True)
-        pdf.ln(10)
-        
         # Summary
         if data['ringkasan']:
-            pdf.set_font(font, 'B', 12)
             pdf.set_text_color(0, 0, 0)
-            pdf.cell(0, 8, "PROFESSIONAL SUMMARY", ln=True)
-            pdf.set_font(font, '', settings['font_size_body'])
+            pdf.set_font(font, '', 10)
             pdf.multi_cell(0, 5, data['ringkasan'])
             pdf.ln(10)
-        
+            
+        # Helper to avoid repetitive code
+        def add_section(title):
+            pdf.set_x(70)
+            pdf.set_font(font, 'B', 14)
+            pdf.set_text_color(r_prim, g_prim, b_prim)
+            pdf.cell(0, 8, title.upper(), border='B', ln=True)
+            pdf.ln(2)
+            
         # Experience
         if data['pengalaman']:
-            pdf.set_font(font, 'B', 12)
-            pdf.set_text_color(r_prim, g_prim, b_prim)
-            pdf.cell(0, 8, "WORK EXPERIENCE", ln=True)
-            
+            add_section("Work Experience")
             for exp in data['pengalaman']:
+                pdf.set_x(70)
+                pdf.set_text_color(0, 0, 0)
                 pdf.set_font(font, 'B', 11)
-                pdf.set_text_color(0, 0, 0)
-                pdf.cell(0, 6, exp.get('posisi', 'Position'), ln=True)
+                pdf.cell(0, 6, exp.get('posisi', ''), ln=True)
                 
+                pdf.set_x(70)
                 pdf.set_font(font, 'I', 10)
-                pdf.set_text_color(r_sec, g_sec, b_sec)
-                pdf.cell(0, 5, f"{exp.get('perusahaan', 'Company')} | {exp.get('periode', 'Period')}", ln=True)
+                pdf.set_text_color(100)
+                pdf.cell(0, 5, f"{exp.get('perusahaan', '')} | {exp.get('periode', '')}", ln=True)
                 
-                pdf.set_font(font, '', settings['font_size_body'])
-                pdf.set_text_color(0, 0, 0)
-                pdf.multi_cell(0, 5, exp.get('deskripsi', 'Description'))
+                pdf.set_x(70)
+                pdf.set_font(font, '', 10)
+                pdf.set_text_color(0)
+                pdf.multi_cell(0, 5, exp.get('deskripsi', ''))
                 pdf.ln(3)
         
         # Education
         if data['pendidikan']:
-            pdf.set_font(font, 'B', 12)
-            pdf.set_text_color(r_prim, g_prim, b_prim)
-            pdf.cell(0, 8, "EDUCATION", ln=True)
-            
+            pdf.ln(5)
+            add_section("Education")
             for edu in data['pendidikan']:
+                pdf.set_x(70)
                 pdf.set_font(font, 'B', 11)
-                pdf.set_text_color(0, 0, 0)
-                pdf.cell(0, 6, edu.get('institusi', 'Institution'), ln=True)
+                pdf.set_text_color(0)
+                pdf.cell(0, 6, edu.get('institusi', ''), ln=True)
+                
+                pdf.set_x(70)
+                pdf.set_font(font, '', 10)
+                pdf.cell(0, 5, f"{edu.get('gelar', '')} | {edu.get('tahun', '')}", ln=True)
+                pdf.ln(2)
+
+    # 2. CLASSIC / EXECUTIVE (Vertical Layout)
+    else:
+        # Header Center
+        align = 'C' if settings['template_style'] == 'executive' else 'L'
+        
+        # Photo handling for vertical layout
+        if temp_img_path and align == 'L':
+             pdf.image(temp_img_path, x=170, y=10, w=30)
+        
+        pdf.set_font(font, 'B', 24)
+        pdf.set_text_color(r_prim, g_prim, b_prim)
+        pdf.cell(0, 10, data['personal_info']['nama'].upper(), ln=True, align=align)
+        
+        if data['personal_info']['posisi_target']:
+            pdf.set_font(font, 'B', 14)
+            pdf.set_text_color(r_sec, g_sec, b_sec)
+            pdf.cell(0, 8, data['personal_info']['posisi_target'], ln=True, align=align)
+            
+        # Contact Bar
+        pdf.set_font(font, '', 9)
+        pdf.set_text_color(50)
+        contacts = []
+        if data['personal_info']['email']: contacts.append(data['personal_info']['email'])
+        if data['personal_info']['telepon']: contacts.append(data['personal_info']['telepon'])
+        if data['personal_info']['linkedin']: contacts.append("LinkedIn")
+        if data['personal_info']['alamat']: contacts.append(data['personal_info']['alamat'])
+        
+        pdf.cell(0, 6, " | ".join(contacts), ln=True, align=align)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(5)
+        
+        # Main Logic for Vertical
+        def add_vertical_section(title):
+            pdf.ln(3)
+            pdf.set_font(font, 'B', 12)
+            pdf.set_fill_color(r_prim, g_prim, b_prim)
+            pdf.set_text_color(255)
+            pdf.cell(0, 7, f"  {title.upper()}", ln=True, fill=True)
+            pdf.ln(2)
+            
+        if data['ringkasan']:
+            add_vertical_section("Professional Summary")
+            pdf.set_text_color(0)
+            pdf.set_font(font, '', 10)
+            pdf.multi_cell(0, 5, data['ringkasan'])
+            
+        if data['pengalaman']:
+            add_vertical_section("Work Experience")
+            for exp in data['pengalaman']:
+                pdf.set_text_color(0)
+                pdf.set_font(font, 'B', 11)
+                pdf.cell(140, 6, exp.get('posisi', ''))
+                pdf.set_font(font, 'B', 10)
+                pdf.cell(0, 6, exp.get('periode', ''), align='R', ln=True)
+                
+                pdf.set_font(font, 'I', 10)
+                pdf.set_text_color(r_sec, g_sec, b_sec)
+                pdf.cell(0, 5, exp.get('perusahaan', ''), ln=True)
                 
                 pdf.set_font(font, '', 10)
-                pdf.set_text_color(r_sec, g_sec, b_sec)
-                pdf.cell(0, 5, f"{edu.get('gelar', 'Degree')} | {edu.get('tahun', 'Year')}", ln=True)
-                pdf.ln(2)
-        
-        # Skills
+                pdf.set_text_color(0)
+                pdf.multi_cell(0, 5, exp.get('deskripsi', ''))
+                pdf.ln(3)
+
         if data['keahlian']:
-            pdf.set_font(font, 'B', 12)
-            pdf.set_text_color(r_prim, g_prim, b_prim)
-            pdf.cell(0, 8, "SKILLS", ln=True)
-            
+            add_vertical_section("Skills")
+            pdf.set_text_color(0)
             pdf.set_font(font, '', 10)
-            pdf.set_text_color(0, 0, 0)
-            skills_text = ", ".join(data['keahlian'][:15])  # Limit to 15 skills
-            pdf.multi_cell(0, 5, skills_text)
-    
-    # Generate PDF to buffer
+            pdf.multi_cell(0, 5, ", ".join(data['keahlian']))
+
+        if data['pendidikan']:
+            add_vertical_section("Education")
+            for edu in data['pendidikan']:
+                pdf.set_font(font, 'B', 11)
+                pdf.set_text_color(0)
+                pdf.cell(140, 6, edu.get('institusi', ''))
+                pdf.set_font(font, 'B', 10)
+                pdf.cell(0, 6, edu.get('tahun', ''), align='R', ln=True)
+                
+                pdf.set_font(font, '', 10)
+                pdf.cell(0, 5, edu.get('gelar', ''), ln=True)
+                pdf.ln(2)
+
+    # Clean up temp file
+    if temp_img_path and os.path.exists(temp_img_path):
+        os.remove(temp_img_path)
+
+    # Return buffer
     buffer = io.BytesIO()
     pdf.output(buffer)
     buffer.seek(0)
     return buffer
 
-# --- WORD DOCX GENERATOR ---
+# --- WORD GENERATOR ---
 def generate_word_doc(data, settings):
     doc = docx.Document()
     
-    # Set document properties
-    doc.core_properties.author = "CV Builder Pro Ultra"
-    doc.core_properties.title = f"CV - {data['personal_info']['nama']}"
+    # Setup Colors
+    r_prim, g_prim, b_prim = hex_to_rgb(settings['base_color'])
+    r_sec, g_sec, b_sec = hex_to_rgb(settings['accent_color'])
     
-    # Set margins
-    sections = doc.sections
-    for section in sections:
-        section.top_margin = Inches(0.5)
-        section.bottom_margin = Inches(0.5)
-        section.left_margin = Inches(0.5)
-        section.right_margin = Inches(0.5)
-    
-    # Choose template style
-    if settings['template_style'] == 'classic_vertical':
-        generate_word_classic(doc, data, settings)
-    elif settings['template_style'] == 'executive':
-        generate_word_executive(doc, data, settings)
-    elif settings['template_style'] == 'creative':
-        generate_word_creative(doc, data, settings)
+    # Handle Photo (Temp File)
+    temp_img_path = save_image_temp(data['personal_info']['foto'])
+
+    # Style Choice
+    if settings['template_style'] == 'modern_sidebar':
+        # Table Layout
+        table = doc.add_table(rows=1, cols=2)
+        table.autofit = False
+        table.columns[0].width = Inches(2.2)
+        table.columns[1].width = Inches(4.8)
+        
+        # --- LEFT CELL (Sidebar) ---
+        cell_l = table.cell(0, 0)
+        
+        # Add Photo if exists
+        if temp_img_path:
+            p = cell_l.add_paragraph()
+            r = p.add_run()
+            r.add_picture(temp_img_path, width=Inches(1.5))
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # Contact
+        cell_l.add_paragraph("CONTACT").runs[0].bold = True
+        
+        contacts = [data['personal_info']['email'], data['personal_info']['telepon'], data['personal_info']['alamat']]
+        for c in contacts:
+            if c: cell_l.add_paragraph(c)
+            
+        # Skills
+        if data['keahlian']:
+            cell_l.add_paragraph("\nSKILLS").runs[0].bold = True
+            for s in data['keahlian']:
+                cell_l.add_paragraph(f"• {s}")
+
+        # --- RIGHT CELL (Main) ---
+        cell_r = table.cell(0, 1)
+        
+        # Name
+        p = cell_r.add_paragraph()
+        run = p.add_run(data['personal_info']['nama'].upper())
+        run.bold = True
+        run.font.size = Pt(24)
+        run.font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+        
+        if data['personal_info']['posisi_target']:
+            p = cell_r.add_paragraph(data['personal_info']['posisi_target'])
+            p.runs[0].font.size = Pt(14)
+            p.runs[0].font.color.rgb = RGBColor(r_sec, g_sec, b_sec)
+
+        # Summary
+        if data['ringkasan']:
+            cell_r.add_paragraph("\nPROFESSIONAL SUMMARY").runs[0].bold = True
+            cell_r.add_paragraph(data['ringkasan'])
+
+        # Experience
+        if data['pengalaman']:
+            p = cell_r.add_paragraph("\nWORK EXPERIENCE")
+            p.runs[0].bold = True
+            p.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+            
+            for exp in data['pengalaman']:
+                p = cell_r.add_paragraph()
+                p.add_run(f"{exp.get('posisi','')}\n").bold = True
+                p.add_run(f"{exp.get('perusahaan','')} | {exp.get('periode','')}\n").italic = True
+                p.add_run(exp.get('deskripsi',''))
+
     else:
-        generate_word_modern(doc, data, settings)
-    
-    # Save to BytesIO
+        # CLASSIC VERTICAL
+        # Name
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run(data['personal_info']['nama'].upper())
+        run.bold = True
+        run.font.size = Pt(22)
+        run.font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+        
+        # Contact
+        p = doc.add_paragraph(f"{data['personal_info']['email']} | {data['personal_info']['telepon']}")
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        doc.add_paragraph().add_run().add_break() # Line Break
+
+        # Sections
+        def add_word_section(title, content_fn):
+            p = doc.add_paragraph(title.upper())
+            p.runs[0].bold = True
+            p.runs[0].font.size = Pt(12)
+            p.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
+            content_fn()
+        
+        if data['ringkasan']:
+            add_word_section("Professional Summary", lambda: doc.add_paragraph(data['ringkasan']))
+            
+        if data['pengalaman']:
+            def add_exp():
+                for exp in data['pengalaman']:
+                    p = doc.add_paragraph()
+                    p.add_run(f"{exp.get('posisi','')}\n").bold = True
+                    p.add_run(f"{exp.get('perusahaan','')} ({exp.get('periode','')})\n").italic = True
+                    p.add_run(exp.get('deskripsi',''))
+            add_word_section("Work Experience", add_exp)
+
+        if data['keahlian']:
+            add_word_section("Skills", lambda: doc.add_paragraph(", ".join(data['keahlian'])))
+
+    # Cleanup
+    if temp_img_path and os.path.exists(temp_img_path):
+        os.remove(temp_img_path)
+
     buffer = io.BytesIO()
     doc.save(buffer)
     buffer.seek(0)
     return buffer
 
-def generate_word_executive(doc, data, settings):
-    """Executive style Word document"""
-    # Get colors
-    try:
-        r_prim, g_prim, b_prim = hex_to_rgb(settings['base_color'])
-        r_sec, g_sec, b_sec = hex_to_rgb(settings['accent_color'])
-    except:
-        r_prim, g_prim, b_prim = (37, 99, 235)
-        r_sec, g_sec, b_sec = (30, 64, 175)
+# --- HTML PREVIEW ---
+def get_html_preview(data, settings):
+    # CSS Variables
+    base = settings['base_color']
+    accent = settings['accent_color']
     
-    # Add header with name
-    header = doc.add_paragraph()
-    header_run = header.add_run(data['personal_info']['nama'].upper() if data['personal_info']['nama'] else "YOUR NAME")
-    header_run.font.size = Pt(28)
-    header_run.font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-    header_run.font.bold = True
-    header.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # Photo Logic HTML
+    photo_html = ""
+    if data['personal_info']['foto']:
+        photo_html = f'<img src="data:image/png;base64,{data["personal_info"]["foto"]}" style="width:100px; height:100px; border-radius:50%; object-fit:cover; margin-bottom:15px; border:3px solid white;">'
     
-    # Add position
-    if data['personal_info']['posisi_target']:
-        position = doc.add_paragraph(data['personal_info']['posisi_target'])
-        position.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        position_run = position.runs[0]
-        position_run.font.size = Pt(14)
-        position_run.font.color.rgb = RGBColor(r_sec, g_sec, b_sec)
-        position_run.italic = True
-    
-    # Add contact info
-    contact_info = []
-    if data['personal_info']['email']: contact_info.append(data['personal_info']['email'])
-    if data['personal_info']['telepon']: contact_info.append(data['personal_info']['telepon'])
-    if data['personal_info']['alamat']: contact_info.append(data['personal_info']['alamat'])
-    
-    if contact_info:
-        contact = doc.add_paragraph(" | ".join(contact_info))
-        contact.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        contact.runs[0].font.size = Pt(10)
-        doc.add_paragraph()  # Spacer
-    
-    # Add horizontal line
-    p = doc.add_paragraph()
-    p.add_run().add_break()
-    
-    # Create 2-column table for main content
-    table = doc.add_table(rows=1, cols=2)
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    table.autofit = False
-    
-    # Set column widths
-    table.columns[0].width = Inches(4)
-    table.columns[1].width = Inches(2.5)
-    
-    # Left column - Summary and Experience
-    left_cell = table.cell(0, 0)
-    
-    # Summary
-    left_cell.paragraphs[0].add_run("PROFESSIONAL SUMMARY").bold = True
-    left_cell.paragraphs[0].runs[0].font.size = Pt(12)
-    left_cell.paragraphs[0].runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-    left_cell.add_paragraph(data['ringkasan'] if data['ringkasan'] else "Add your professional summary here.")
-    
-    # Experience
-    if data['pengalaman']:
-        left_cell.add_paragraph().add_run("WORK EXPERIENCE").bold = True
-        left_cell.paragraphs[-1].runs[0].font.size = Pt(12)
-        left_cell.paragraphs[-1].runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        
-        for exp in data['pengalaman']:
-            p = left_cell.add_paragraph()
-            p.add_run(f"{exp.get('posisi', 'Position')}\n").bold = True
-            p.add_run(f"{exp.get('perusahaan', 'Company')} | {exp.get('periode', 'Period')}\n").italic = True
-            p.add_run(f"{exp.get('deskripsi', 'Description')}")
-            p.paragraph_format.space_after = Pt(8)
-    
-    # Right column - Skills and Education
-    right_cell = table.cell(0, 1)
-    
-    # Skills
-    if data['keahlian']:
-        right_cell.paragraphs[0].add_run("KEY SKILLS").bold = True
-        right_cell.paragraphs[0].runs[0].font.size = Pt(12)
-        right_cell.paragraphs[0].runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        
-        for skill in data['keahlian'][:10]:  # Limit to 10 skills
-            right_cell.add_paragraph(f"• {skill}")
-    
-    # Education
-    if data['pendidikan']:
-        right_cell.add_paragraph().add_run("EDUCATION").bold = True
-        right_cell.paragraphs[-1].runs[0].font.size = Pt(12)
-        right_cell.paragraphs[-1].runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        
-        for edu in data['pendidikan']:
-            p = right_cell.add_paragraph()
-            p.add_run(f"{edu.get('institusi', 'Institution')}\n").bold = True
-            p.add_run(f"{edu.get('gelar', 'Degree')} | {edu.get('tahun', 'Year')}")
-            p.paragraph_format.space_after = Pt(6)
-
-def generate_word_classic(doc, data, settings):
-    """Classic ATS-friendly Word document"""
-    # Get colors
-    try:
-        r_prim, g_prim, b_prim = hex_to_rgb(settings['base_color'])
-    except:
-        r_prim, g_prim, b_prim = (37, 99, 235)
-    
-    # Name
-    title = doc.add_paragraph(data['personal_info']['nama'].upper() if data['personal_info']['nama'] else "YOUR NAME")
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title.runs[0].bold = True
-    title.runs[0].font.size = Pt(22)
-    title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-    
-    # Contact info
-    contact = doc.add_paragraph()
-    contact.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    contact_info = []
-    if data['personal_info']['email']: contact_info.append(data['personal_info']['email'])
-    if data['personal_info']['telepon']: contact_info.append(data['personal_info']['telepon'])
-    if data['personal_info']['alamat']: contact_info.append(data['personal_info']['alamat'])
-    if data['personal_info']['linkedin']: contact_info.append("LinkedIn: " + data['personal_info']['linkedin'])
-    
-    contact.add_run(" | ".join(contact_info) if contact_info else "Add your contact information")
-    contact.runs[0].font.size = Pt(10)
-    
-    # Horizontal line
-    doc.add_paragraph().add_run().add_break()
-    
-    # Professional Summary
-    if data['ringkasan']:
-        summary_title = doc.add_paragraph("PROFESSIONAL SUMMARY")
-        summary_title.runs[0].bold = True
-        summary_title.runs[0].font.size = Pt(12)
-        summary_title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        doc.add_paragraph(data['ringkasan'])
-    
-    # Work Experience
-    if data['pengalaman']:
-        exp_title = doc.add_paragraph("WORK EXPERIENCE")
-        exp_title.runs[0].bold = True
-        exp_title.runs[0].font.size = Pt(12)
-        exp_title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        
-        for exp in data['pengalaman']:
-            p = doc.add_paragraph()
-            p.add_run(f"{exp.get('posisi', 'Position')}\n").bold = True
-            p.add_run(f"{exp.get('perusahaan', 'Company')}, {exp.get('periode', 'Period')}\n").italic = True
-            p.add_run(exp.get('deskripsi', 'Description'))
-            p.paragraph_format.space_after = Pt(6)
-    
-    # Education
-    if data['pendidikan']:
-        edu_title = doc.add_paragraph("EDUCATION")
-        edu_title.runs[0].bold = True
-        edu_title.runs[0].font.size = Pt(12)
-        edu_title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        
-        for edu in data['pendidikan']:
-            p = doc.add_paragraph()
-            p.add_run(f"{edu.get('institusi', 'Institution')}\n").bold = True
-            p.add_run(f"{edu.get('gelar', 'Degree')}, {edu.get('tahun', 'Year')}")
-            p.paragraph_format.space_after = Pt(6)
-    
-    # Skills
-    if data['keahlian']:
-        skills_title = doc.add_paragraph("SKILLS")
-        skills_title.runs[0].bold = True
-        skills_title.runs[0].font.size = Pt(12)
-        skills_title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        
-        skills_text = ", ".join(data['keahlian'][:15])  # Limit to 15 skills
-        doc.add_paragraph(skills_text)
-
-def generate_word_modern(doc, data, settings):
-    """Modern sidebar style Word document"""
-    # Get colors
-    try:
-        r_prim, g_prim, b_prim = hex_to_rgb(settings['base_color'])
-    except:
-        r_prim, g_prim, b_prim = (37, 99, 235)
-    
-    # Create table for layout
-    table = doc.add_table(rows=1, cols=2)
-    table.autofit = False
-    table.columns[0].width = Inches(2)
-    table.columns[1].width = Inches(5)
-    
-    # Left column (Sidebar)
-    left_cell = table.cell(0, 0)
-    
-    # Name in sidebar
-    name_para = left_cell.paragraphs[0]
-    name_run = name_para.add_run(data['personal_info']['nama'][:15].upper() + "..." if len(data['personal_info']['nama']) > 15 else data['personal_info']['nama'].upper() if data['personal_info']['nama'] else "YOUR NAME")
-    name_run.font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-    name_run.font.bold = True
-    name_run.font.size = Pt(14)
-    
-    # Add contact to sidebar
-    contact_items = []
-    if data['personal_info']['email']: contact_items.append(data['personal_info']['email'])
-    if data['personal_info']['telepon']: contact_items.append(data['personal_info']['telepon'])
-    
-    for item in contact_items:
-        p = left_cell.add_paragraph(item[:20] + "..." if len(item) > 20 else item)
-        p.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        p.runs[0].font.size = Pt(9)
-    
-    # Right column - Main content
-    right_cell = table.cell(0, 1)
-    
-    # Professional Summary
-    if data['ringkasan']:
-        right_cell.paragraphs[0].add_run("Professional Summary").bold = True
-        right_cell.paragraphs[0].runs[0].font.size = Pt(14)
-        right_cell.paragraphs[0].runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        right_cell.add_paragraph(data['ringkasan'])
-    
-    # Work Experience
-    if data['pengalaman']:
-        right_cell.add_paragraph().add_run("Work Experience").bold = True
-        right_cell.paragraphs[-1].runs[0].font.size = Pt(14)
-        right_cell.paragraphs[-1].runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        
-        for exp in data['pengalaman']:
-            p = right_cell.add_paragraph()
-            p.add_run(f"{exp.get('posisi', 'Position')}\n").bold = True
-            p.add_run(f"{exp.get('perusahaan', 'Company')} | {exp.get('periode', 'Period')}\n").italic = True
-            p.add_run(exp.get('deskripsi', 'Description'))
-            p.paragraph_format.space_after = Pt(6)
-    
-    # Education
-    if data['pendidikan']:
-        right_cell.add_paragraph().add_run("Education").bold = True
-        right_cell.paragraphs[-1].runs[0].font.size = Pt(14)
-        right_cell.paragraphs[-1].runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        
-        for edu in data['pendidikan']:
-            p = right_cell.add_paragraph()
-            p.add_run(f"{edu.get('institusi', 'Institution')}\n").bold = True
-            p.add_run(f"{edu.get('gelar', 'Degree')} | {edu.get('tahun', 'Year')}")
-            p.paragraph_format.space_after = Pt(4)
-
-def generate_word_creative(doc, data, settings):
-    """Creative Word document"""
-    # Get colors
-    try:
-        r_prim, g_prim, b_prim = hex_to_rgb(settings['base_color'])
-        r_sec, g_sec, b_sec = hex_to_rgb(settings['accent_color'])
-    except:
-        r_prim, g_prim, b_prim = (37, 99, 235)
-        r_sec, g_sec, b_sec = (30, 64, 175)
-    
-    # Creative header
-    header = doc.add_paragraph()
-    header_run = header.add_run(data['personal_info']['nama'] if data['personal_info']['nama'] else "YOUR NAME")
-    header_run.font.size = Pt(36)
-    header_run.font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-    header_run.font.bold = True
-    
-    # Position
-    if data['personal_info']['posisi_target']:
-        position = doc.add_paragraph(data['personal_info']['posisi_target'])
-        position_run = position.runs[0]
-        position_run.font.size = Pt(18)
-        position_run.font.color.rgb = RGBColor(r_sec, g_sec, b_sec)
-        position_run.italic = True
-    
-    doc.add_paragraph()  # Spacer
-    
-    # Contact info
-    contact_info = []
-    if data['personal_info']['email']: contact_info.append(f"📧 {data['personal_info']['email']}")
-    if data['personal_info']['telepon']: contact_info.append(f"📱 {data['personal_info']['telepon']}")
-    if data['personal_info']['alamat']: contact_info.append(f"📍 {data['personal_info']['alamat']}")
-    
-    if contact_info:
-        contact_para = doc.add_paragraph()
-        for contact in contact_info:
-            contact_para.add_run(f"{contact}   ")
-        contact_para.runs[0].font.size = Pt(10)
-        doc.add_paragraph()  # Spacer
-    
-    # Summary with icon
-    if data['ringkasan']:
-        summary_title = doc.add_paragraph("✨ ABOUT ME")
-        summary_title.runs[0].font.size = Pt(14)
-        summary_title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        summary_title.runs[0].bold = True
-        doc.add_paragraph(data['ringkasan'])
-    
-    # Experience timeline
-    if data['pengalaman']:
-        exp_title = doc.add_paragraph("📈 EXPERIENCE TIMELINE")
-        exp_title.runs[0].font.size = Pt(14)
-        exp_title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        exp_title.runs[0].bold = True
-        
-        for exp in data['pengalaman']:
-            p = doc.add_paragraph()
-            p.add_run(f"{exp.get('posisi', 'Position')}\n").bold = True
-            p.add_run(f"{exp.get('perusahaan', 'Company')} • {exp.get('periode', 'Period')}\n").italic = True
-            p.add_run(exp.get('deskripsi', 'Description'))
-            p.paragraph_format.space_after = Pt(8)
-    
-    # Skills
-    if data['keahlian']:
-        skills_title = doc.add_paragraph("🛠️ SKILLS")
-        skills_title.runs[0].font.size = Pt(14)
-        skills_title.runs[0].font.color.rgb = RGBColor(r_prim, g_prim, b_prim)
-        skills_title.runs[0].bold = True
-        
-        skills_text = " • ".join(data['keahlian'][:12])  # Limit to 12 skills
-        doc.add_paragraph(skills_text)
-
-# --- HTML PREVIEW ENHANCED ---
-def get_html_preview_enhanced(data, settings):
-    ats_score = calculate_ats_score(data)
-    
-    # Handle theme-specific colors
-    if settings['theme'] == 'dark':
-        border_color = '#444'
-        text_color = '#fff'
-        bg_color = '#1e1e1e'
-        skill_bg = '#333'
-        date_color = '#aaa'
-    else:
-        border_color = '#eee'
-        text_color = '#333'
-        bg_color = 'white'
-        skill_bg = '#f0f0f0'
-        date_color = '#666'
-    
-    # Build HTML
-    html_parts = []
-    html_parts.append(f"""
-    <style>
-        .cv-container {{
-            max-width: 800px;
-            margin: 0 auto;
-            background: {bg_color};
-            color: {text_color};
-            box-shadow: 0 5px 25px rgba(0,0,0,0.1);
-            border-radius: 10px;
-            overflow: hidden;
-        }}
-        .cv-header {{
-            background: linear-gradient(135deg, {settings['base_color']}, {settings['accent_color']});
-            padding: 40px;
-            color: white;
-        }}
-        .ats-score {{
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            background: rgba(255,255,255,0.2);
-            padding: 5px 15px;
-            border-radius: 20px;
-            font-size: 12px;
-        }}
-        .name {{
-            font-size: 36px;
-            font-weight: bold;
-            margin-bottom: 5px;
-        }}
-        .position {{
-            font-size: 20px;
-            opacity: 0.9;
-            margin-bottom: 20px;
-        }}
-        .contact-bar {{
-            display: flex;
-            gap: 20px;
-            flex-wrap: wrap;
-            font-size: 14px;
-        }}
-        .section {{
-            padding: 25px 40px;
-            border-bottom: 1px solid {border_color};
-        }}
-        .section-title {{
-            color: {settings['base_color']};
-            font-size: 18px;
-            font-weight: bold;
-            margin-bottom: 15px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }}
-        .skill-tag {{
-            display: inline-block;
-            background: {skill_bg};
-            padding: 5px 15px;
-            border-radius: 20px;
-            margin: 5px;
-            font-size: 14px;
-            border-left: 4px solid {settings['accent_color']};
-        }}
-        .timeline-item {{
-            position: relative;
-            padding-left: 30px;
-            margin-bottom: 25px;
-        }}
-        .timeline-item:before {{
-            content: '';
-            position: absolute;
-            left: 0;
-            top: 5px;
-            width: 12px;
-            height: 12px;
-            background: {settings['accent_color']};
-            border-radius: 50%;
-        }}
-        .job-title {{
-            font-weight: bold;
-            font-size: 16px;
-            margin-bottom: 5px;
-        }}
-        .company {{
-            color: {settings['accent_color']};
-            font-style: italic;
-            margin-bottom: 5px;
-        }}
-        .date {{
-            float: right;
-            color: {date_color};
-            font-size: 14px;
-        }}
-    </style>
-    
-    <div class="cv-container">
-        <div class="cv-header">
-            <div class="ats-score">ATS Score: {ats_score}%</div>
-            <div class="name">{data['personal_info']['nama'] or 'Your Name'}</div>
-            <div class="position">{data['personal_info']['posisi_target'] or 'Professional'}</div>
-            <div class="contact-bar">
-    """)
-    
-    # Add contact info
-    if data['personal_info']['email']:
-        html_parts.append(f'<div>📧 {data["personal_info"]["email"]}</div>')
-    if data['personal_info']['telepon']:
-        html_parts.append(f'<div>📱 {data["personal_info"]["telepon"]}</div>')
-    if data['personal_info']['alamat']:
-        html_parts.append(f'<div>📍 {data["personal_info"]["alamat"]}</div>')
-    
-    html_parts.append('</div></div>')
-    
-    # Professional Summary
-    html_parts.append('<div class="section">')
-    html_parts.append('<div class="section-title">📝 Professional Summary</div>')
-    html_parts.append(f'<p>{data["ringkasan"] or "No summary provided"}</p>')
-    html_parts.append('</div>')
-    
-    # Work Experience
-    if data['pengalaman']:
-        html_parts.append('<div class="section">')
-        html_parts.append('<div class="section-title">💼 Work Experience</div>')
-        for exp in data['pengalaman']:
-            html_parts.append(f'''
-            <div class="timeline-item">
-                <span class="date">{exp.get('periode', 'Period')}</span>
-                <div class="job-title">{exp.get('posisi', 'Position')}</div>
-                <div class="company">{exp.get('perusahaan', 'Company')}</div>
-                <p>{exp.get('deskripsi', 'Description')}</p>
+    if settings['template_style'] == 'modern_sidebar':
+        return f"""
+        <div style="display: flex; min-height: 800px; font-family: sans-serif; box-shadow: 0 0 15px rgba(0,0,0,0.1);">
+            <div style="width: 30%; background-color: {base}; color: white; padding: 30px;">
+                {photo_html}
+                <div style="font-weight: bold; margin-bottom: 10px;">CONTACT</div>
+                <div style="font-size: 0.9em; margin-bottom: 20px;">
+                    <div>{data['personal_info']['email']}</div>
+                    <div>{data['personal_info']['telepon']}</div>
+                    <div>{data['personal_info']['alamat']}</div>
+                </div>
+                
+                <div style="font-weight: bold; margin-bottom: 10px;">SKILLS</div>
+                <div style="font-size: 0.9em;">
+                    {''.join([f'<div style="margin-bottom:5px;">• {s}</div>' for s in data['keahlian']])}
+                </div>
             </div>
-            ''')
-        html_parts.append('</div>')
-    
-    # Education
-    if data['pendidikan']:
-        html_parts.append('<div class="section">')
-        html_parts.append('<div class="section-title">🎓 Education</div>')
-        for edu in data['pendidikan']:
-            html_parts.append(f'''
-            <div class="timeline-item">
-                <span class="date">{edu.get('tahun', 'Year')}</span>
-                <div class="job-title">{edu.get('institusi', 'Institution')}</div>
-                <p>{edu.get('gelar', 'Degree')}</p>
+            
+            <div style="width: 70%; padding: 40px; background: white;">
+                <h1 style="color: {base}; margin: 0;">{data['personal_info']['nama'].upper()}</h1>
+                <h3 style="color: {accent}; margin-top: 5px;">{data['personal_info']['posisi_target']}</h3>
+                
+                <p style="margin-top: 20px; line-height: 1.6;">{data['ringkasan']}</p>
+                
+                <h3 style="color: {base}; border-bottom: 2px solid {base}; padding-bottom: 5px; margin-top: 30px;">WORK EXPERIENCE</h3>
+                {''.join([f'''
+                    <div style="margin-bottom: 15px;">
+                        <div style="font-weight: bold; font-size: 1.1em;">{e.get('posisi','')}</div>
+                        <div style="color: #666; font-style: italic; font-size: 0.9em;">{e.get('perusahaan','')} | {e.get('periode','')}</div>
+                        <div style="margin-top: 5px;">{e.get('deskripsi','')}</div>
+                    </div>
+                ''' for e in data['pengalaman']])}
+                
+                <h3 style="color: {base}; border-bottom: 2px solid {base}; padding-bottom: 5px; margin-top: 30px;">EDUCATION</h3>
+                 {''.join([f'''
+                    <div style="margin-bottom: 10px;">
+                        <div style="font-weight: bold;">{e.get('institusi','')}</div>
+                        <div>{e.get('gelar','')} | {e.get('tahun','')}</div>
+                    </div>
+                ''' for e in data['pendidikan']])}
             </div>
-            ''')
-        html_parts.append('</div>')
-    
-    # Skills
-    if data['keahlian']:
-        html_parts.append('<div class="section">')
-        html_parts.append('<div class="section-title">🛠️ Skills</div>')
-        for skill in data['keahlian'][:20]:  # Limit to 20 skills
-            html_parts.append(f'<span class="skill-tag">{skill}</span>')
-        html_parts.append('</div>')
-    
-    # Languages
-    if data['bahasa']:
-        html_parts.append('<div class="section">')
-        html_parts.append('<div class="section-title">🌐 Languages</div>')
-        html_parts.append(f'<p>{", ".join(data["bahasa"][:5])}</p>')  # Limit to 5 languages
-        html_parts.append('</div>')
-    
-    html_parts.append('</div>')  # Close cv-container
-    
-    return ''.join(html_parts)
-
-# --- AI SUGGESTION ENGINE ---
-def get_ai_suggestions(data):
-    suggestions = []
-    
-    if not data['ringkasan']:
-        suggestions.append("✨ **Tambahkan Ringkasan Profesional** - Bagian ini sangat penting untuk ATS")
-    
-    if len(data['keahlian']) < 5:
-        suggestions.append("🛠️ **Tambahkan lebih banyak keahlian** - Minimal 5-10 skill untuk CV yang kompetitif")
-    
-    if not data['pengalaman']:
-        suggestions.append("💼 **Tambahkan pengalaman kerja** - Wajib untuk CV profesional")
-    
-    keywords = ['managed', 'achieved', 'developed', 'increased', 'reduced', 'led']
-    summary = data['ringkasan'].lower()
-    missing_keywords = [kw for kw in keywords if kw not in summary]
-    
-    if missing_keywords and len(missing_keywords) > 2:
-        suggestions.append("🔑 **Gunakan lebih banyak action verbs** - Seperti: " + ", ".join(keywords[:3]))
-    
-    return suggestions
-
-# --- UI ENHANCED ---
-st.title("🚀 CV Builder Pro Ultra v2.0")
-st.markdown("Build professional, ATS-friendly CVs with AI-powered optimization")
-
-# Sidebar with progress and AI suggestions
-with st.sidebar:
-    st.header("📊 CV Progress")
-    
-    # Calculate completion percentage
-    completion = 0
-    if st.session_state.cv_data['personal_info']['nama']: completion += 15
-    if st.session_state.cv_data['personal_info']['email']: completion += 15
-    if st.session_state.cv_data['ringkasan']: completion += 20
-    if st.session_state.cv_data['pengalaman']: completion += 25
-    if st.session_state.cv_data['pendidikan']: completion += 15
-    if st.session_state.cv_data['keahlian']: completion += 10
-    
-    st.progress(completion/100)
-    st.caption(f"{completion}% Complete")
-    
-    st.divider()
-    
-    st.header("🤖 AI Suggestions")
-    suggestions = get_ai_suggestions(st.session_state.cv_data)
-    if suggestions:
-        for suggestion in suggestions:
-            st.info(suggestion)
-    else:
-        st.success("✅ CV Anda sudah optimal!")
-    
-    st.divider()
-    
-    st.header("🎯 ATS Score")
-    ats_score = calculate_ats_score(st.session_state.cv_data)
-    st.metric("Compatibility", f"{ats_score}%")
-    
-    if ats_score < 70:
-        st.warning("ATS score rendah. Perbaiki CV Anda.")
-    elif ats_score < 85:
-        st.info("ATS score cukup baik.")
-    else:
-        st.success("ATS score sangat baik!")
-    
-    st.divider()
-    
-    # Quick actions
-    st.header("⚡ Quick Actions")
-    if st.button("🔄 Reset CV", type="secondary", key="reset_cv"):
-        st.session_state.cv_data = {
-            'personal_info': {
-                'nama': '', 'email': '', 'telepon': '', 'alamat': '',
-                'linkedin': '', 'github': '', 'website': '', 'posisi_target': '',
-                'foto': None
-            },
-            'ringkasan': '',
-            'pengalaman': [],
-            'pendidikan': [],
-            'keahlian': [],
-            'sertifikasi': [],
-            'proyek': [],
-            'bahasa': [],
-            'hobi': []
-        }
-        st.rerun()
-    
-    if st.button("📋 Generate AI Summary", key="ai_summary"):
-        # Simple AI summary generator
-        sample_summary = f"Professional {st.session_state.cv_data['personal_info']['posisi_target'] or 'specialist'} with expertise in {', '.join(st.session_state.cv_data['keahlian'][:3]) if st.session_state.cv_data['keahlian'] else 'relevant field'}. Proven track record in delivering measurable results."
-        st.session_state.cv_data['ringkasan'] = sample_summary
-        st.success("AI summary generated!")
-        st.rerun()
-
-# Main tabs
-tab1, tab2, tab3, tab4 = st.tabs(["📝 Build CV", "🎨 Design", "👁️ Preview", "📤 Export"])
-
-# TAB 1: BUILD CV
-with tab1:
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("Personal Information")
-        
-        # Profile photo upload
-        uploaded_file = st.file_uploader("Upload Profile Photo (Optional)", type=['jpg', 'png', 'jpeg'], key="photo_upload")
-        if uploaded_file:
-            st.session_state.cv_data['personal_info']['foto'] = base64.b64encode(uploaded_file.read()).decode()
-            st.image(uploaded_file, width=150)
-        
-        # Personal info form
-        cols = st.columns(2)
-        with cols[0]:
-            st.session_state.cv_data['personal_info']['nama'] = st.text_input(
-                "Full Name*",
-                value=st.session_state.cv_data['personal_info']['nama'],
-                placeholder="John Doe",
-                key="name_input"
-            )
-            st.session_state.cv_data['personal_info']['email'] = st.text_input(
-                "Email*",
-                value=st.session_state.cv_data['personal_info']['email'],
-                placeholder="john@example.com",
-                key="email_input"
-            )
-            st.session_state.cv_data['personal_info']['telepon'] = st.text_input(
-                "Phone",
-                value=st.session_state.cv_data['personal_info']['telepon'],
-                placeholder="+62 812-3456-7890",
-                key="phone_input"
-            )
-        
-        with cols[1]:
-            st.session_state.cv_data['personal_info']['posisi_target'] = st.text_input(
-                "Target Position*",
-                value=st.session_state.cv_data['personal_info']['posisi_target'],
-                placeholder="Senior Data Scientist",
-                key="position_input"
-            )
-            st.session_state.cv_data['personal_info']['linkedin'] = st.text_input(
-                "LinkedIn URL",
-                value=st.session_state.cv_data['personal_info']['linkedin'],
-                placeholder="linkedin.com/in/username",
-                key="linkedin_input"
-            )
-            st.session_state.cv_data['personal_info']['alamat'] = st.text_input(
-                "Location",
-                value=st.session_state.cv_data['personal_info']['alamat'],
-                placeholder="Jakarta, Indonesia",
-                key="location_input"
-            )
-    
-    with col2:
-        st.subheader("Quick Stats")
-        st.metric("Experience Items", len(st.session_state.cv_data['pengalaman']))
-        st.metric("Education Items", len(st.session_state.cv_data['pendidikan']))
-        st.metric("Skills", len(st.session_state.cv_data['keahlian']))
-        st.metric("Languages", len(st.session_state.cv_data['bahasa']))
-    
-    # Professional Summary
-    st.subheader("Professional Summary")
-    st.session_state.cv_data['ringkasan'] = st.text_area(
-        "Write a compelling summary about your professional background",
-        value=st.session_state.cv_data['ringkasan'],
-        height=120,
-        placeholder="Results-driven professional with X years of experience in...",
-        key="summary_input"
-    )
-    
-    # Experience Section
-    st.subheader("💼 Work Experience")
-    
-    with st.expander("Add/Edit Work Experience", expanded=True):
-        if st.button("➕ Add New Experience", type="primary", key="add_experience"):
-            st.session_state.cv_data['pengalaman'].append({
-                'posisi': '', 
-                'perusahaan': '', 
-                'periode': '', 
-                'deskripsi': '',
-                'lokasi': ''
-            })
-        
-        for i, exp in enumerate(st.session_state.cv_data['pengalaman']):
-            st.markdown(f"**Experience #{i+1}**")
-            
-            cols = st.columns([3, 2, 2])
-            with cols[0]:
-                exp['posisi'] = st.text_input(f"Position #{i+1}", exp['posisi'], key=f"pos_{i}")
-            with cols[1]:
-                exp['perusahaan'] = st.text_input(f"Company #{i+1}", exp['perusahaan'], key=f"comp_{i}")
-            with cols[2]:
-                exp['periode'] = st.text_input(f"Period #{i+1}", exp['periode'], placeholder="2020 - Present", key=f"period_{i}")
-            
-            exp['deskripsi'] = st.text_area(
-                f"Description #{i+1}",
-                exp['deskripsi'],
-                height=80,
-                placeholder="• Achieved X by doing Y\n• Managed team of Z\n• Increased efficiency by 30%",
-                key=f"desc_{i}"
-            )
-            
-            col1, col2 = st.columns([4, 1])
-            with col2:
-                if st.button(f"🗑️ Delete #{i+1}", key=f"del_exp_{i}"):
-                    st.session_state.cv_data['pengalaman'].pop(i)
-                    st.rerun()
-            
-            st.divider()
-    
-    # Education Section
-    with st.expander("🎓 Education", expanded=False):
-        if st.button("➕ Add Education", key="add_education"):
-            st.session_state.cv_data['pendidikan'].append({
-                'institusi': '',
-                'gelar': '',
-                'tahun': '',
-                'deskripsi': ''
-            })
-        
-        for i, edu in enumerate(st.session_state.cv_data['pendidikan']):
-            cols = st.columns([3, 2, 1])
-            with cols[0]:
-                edu['institusi'] = st.text_input(f"Institution #{i+1}", edu['institusi'], key=f"inst_{i}")
-            with cols[1]:
-                edu['gelar'] = st.text_input(f"Degree #{i+1}", edu['gelar'], key=f"degree_{i}")
-            with cols[2]:
-                edu['tahun'] = st.text_input(f"Year #{i+1}", edu['tahun'], key=f"year_{i}")
-            
-            edu['deskripsi'] = st.text_area(
-                f"Description #{i+1}",
-                edu.get('deskripsi', ''),
-                height=60,
-                key=f"edu_desc_{i}"
-            )
-            
-            if st.button(f"Delete Education #{i+1}", key=f"del_edu_{i}"):
-                st.session_state.cv_data['pendidikan'].pop(i)
-                st.rerun()
-            
-            st.divider()
-    
-    # Skills & Languages
-    with st.expander("🛠️ Skills & Languages", expanded=False):
-        col_skills, col_lang = st.columns(2)
-        
-        with col_skills:
-            st.subheader("Skills")
-            skills_input = st.text_area(
-                "Enter your skills (separate with commas)",
-                value=", ".join(st.session_state.cv_data['keahlian']),
-                height=100,
-                placeholder="Python, Data Analysis, Project Management, JavaScript, SQL",
-                key="skills_input"
-            )
-            if skills_input:
-                st.session_state.cv_data['keahlian'] = [skill.strip() for skill in skills_input.split(",") if skill.strip()]
-        
-        with col_lang:
-            st.subheader("Languages")
-            lang_input = st.text_area(
-                "Enter languages you speak (separate with commas)",
-                value=", ".join(st.session_state.cv_data['bahasa']),
-                height=100,
-                placeholder="English, Indonesian, Japanese, Spanish",
-                key="lang_input"
-            )
-            if lang_input:
-                st.session_state.cv_data['bahasa'] = [lang.strip() for lang in lang_input.split(",") if lang.strip()]
-
-# TAB 2: DESIGN
-with tab2:
-    col_d1, col_d2, col_d3 = st.columns([1, 2, 1])
-    
-    with col_d1:
-        st.subheader("Template")
-        selected_layout = st.selectbox(
-            "Choose Layout",
-            options=list(LAYOUTS.keys()),
-            format_func=lambda x: f"{LAYOUTS[x]['name']} (ATS: {LAYOUTS[x]['ats_score']}%)",
-            key="layout_select"
-        )
-        st.session_state.settings['template_style'] = selected_layout
-        
-        st.divider()
-        
-        st.subheader("Theme")
-        theme_color = st.selectbox(
-            "Color Theme",
-            options=list(THEME_COLORS.keys()),
-            format_func=lambda x: x.replace('_', ' ').title(),
-            key="theme_select"
-        )
-        
-        # Apply theme colors
-        if theme_color:
-            st.session_state.settings['base_color'] = THEME_COLORS[theme_color]['primary']
-            st.session_state.settings['accent_color'] = THEME_COLORS[theme_color]['secondary']
-        
-        st.session_state.settings['theme'] = st.radio(
-            "Theme Mode",
-            options=['light', 'dark'],
-            horizontal=True,
-            key="theme_mode"
-        )
-    
-    with col_d2:
-        st.subheader("Customize Colors")
-        
-        col_c1, col_c2 = st.columns(2)
-        with col_c1:
-            base_color = st.color_picker(
-                "Primary Color",
-                st.session_state.settings['base_color'],
-                key="base_color_picker"
-            )
-            st.session_state.settings['base_color'] = base_color
-            
-            # Show color applications
-            st.markdown("**Used for:**")
-            st.caption("• Headers")
-            st.caption("• Section titles")
-            st.caption("• Sidebars")
-        
-        with col_c2:
-            accent_color = st.color_picker(
-                "Accent Color",
-                st.session_state.settings['accent_color'],
-                key="accent_color_picker"
-            )
-            st.session_state.settings['accent_color'] = accent_color
-            
-            st.markdown("**Used for:**")
-            st.caption("• Sub-headers")
-            st.caption("• Links & highlights")
-            st.caption("• Bullets & icons")
-        
-        st.divider()
-        
-        st.subheader("Typography")
-        
-        font_col1, font_col2 = st.columns(2)
-        with font_col1:
-            selected_font = st.selectbox(
-                "Font Family",
-                options=list(FONTS.keys()),
-                index=0,
-                key="font_select"
-            )
-            st.session_state.settings['font_family'] = selected_font
-        
-        with font_col2:
-            st.session_state.settings['font_size_body'] = st.slider(
-                "Body Font Size",
-                min_value=8,
-                max_value=14,
-                value=st.session_state.settings['font_size_body'],
-                key="font_size_slider"
-            )
-        
-        # Font preview
-        st.markdown("**Font Preview:**")
-        st.markdown(f"<span style='font-family:{FONTS[selected_font]['docx']}; font-size:16px;'>The quick brown fox jumps over the lazy dog</span>", unsafe_allow_html=True)
-    
-    with col_d3:
-        st.subheader("Preview")
-        st.info(f"**Selected:** {LAYOUTS[selected_layout]['name']}")
-        
-        # Template preview card
-        preview_html = f"""
-        <div style="
-            background: {st.session_state.settings['base_color']};
-            height: 120px;
-            border-radius: 10px;
-            padding: 15px;
-            color: white;
-            margin-bottom: 10px;
-        ">
-            <div style="font-weight: bold; font-size: 18px;">Your Name</div>
-            <div style="font-size: 12px; opacity: 0.9;">Target Position</div>
-        </div>
-        <div style="
-            background: white;
-            height: 200px;
-            border-radius: 10px;
-            padding: 15px;
-            border: 2px solid #eee;
-        ">
-            <div style="color: {st.session_state.settings['accent_color']}; font-weight: bold;">Sections</div>
-            <div style="height: 10px; background: #f0f0f0; margin: 10px 0; border-radius: 5px;"></div>
-            <div style="height: 10px; background: #f0f0f0; margin: 10px 0; border-radius: 5px; width: 80%;"></div>
-            <div style="height: 10px; background: #f0f0f0; margin: 10px 0; border-radius: 5px; width: 60%;"></div>
         </div>
         """
-        st.markdown(preview_html, unsafe_allow_html=True)
-
-# TAB 3: PREVIEW
-with tab3:
-    if not st.session_state.cv_data['personal_info']['nama']:
-        st.warning("Please enter your name in the Build CV tab to see preview.")
     else:
-        # Show ATS score prominently
-        ats_score = calculate_ats_score(st.session_state.cv_data)
-        
-        col_score, col_actions = st.columns([1, 3])
-        with col_score:
-            st.metric(label="ATS Score", value=f"{ats_score}%")
-        
-        with col_actions:
-            if ats_score < 70:
-                st.error("⚠️ Low ATS score. Improve your CV for better results.")
-            elif ats_score < 85:
-                st.warning("⚠️ Moderate ATS score. Some improvements needed.")
-            else:
-                st.success("✅ Excellent ATS score! Your CV is well-optimized.")
-        
-        # Interactive preview
-        preview_col1, preview_col2 = st.columns([3, 1])
-        
-        with preview_col1:
-            st.subheader("Live Preview")
-            html_preview = get_html_preview_enhanced(st.session_state.cv_data, st.session_state.settings)
-            st.components.v1.html(html_preview, height=1000, scrolling=True)
-        
-        with preview_col2:
-            st.subheader("Quick Checks")
+        # CLASSIC PREVIEW
+        return f"""
+        <div style="padding: 50px; background: white; max-width: 800px; margin: 0 auto; box-shadow: 0 0 15px rgba(0,0,0,0.1); font-family: 'Times New Roman', serif;">
+            <div style="text-align: center;">
+                <h1 style="color: {base}; margin-bottom: 5px;">{data['personal_info']['nama'].upper()}</h1>
+                <div style="margin-bottom: 10px;">{data['personal_info']['posisi_target']}</div>
+                <div style="font-size: 0.9em; border-bottom: 1px solid #ccc; padding-bottom: 15px; margin-bottom: 20px;">
+                    {data['personal_info']['email']} | {data['personal_info']['telepon']} | {data['personal_info']['alamat']}
+                </div>
+            </div>
             
-            checklist_items = [
-                ("Name included", bool(st.session_state.cv_data['personal_info']['nama'])),
-                ("Email included", bool(st.session_state.cv_data['personal_info']['email'])),
-                ("Professional summary", bool(st.session_state.cv_data['ringkasan'])),
-                ("Work experience", len(st.session_state.cv_data['pengalaman']) > 0),
-                ("Education", len(st.session_state.cv_data['pendidikan']) > 0),
-                ("Skills (5+)", len(st.session_state.cv_data['keahlian']) >= 5),
-                ("Action verbs used", any(word in st.session_state.cv_data['ringkasan'].lower() for word in ['managed', 'achieved', 'developed', 'increased'])),
-                ("Quantifiable achievements", any(char.isdigit() for char in st.session_state.cv_data['ringkasan']))
-            ]
+            <h3 style="background: {base}; color: white; padding: 5px 10px; font-size: 1em; letter-spacing: 1px;">PROFESSIONAL SUMMARY</h3>
+            <p>{data['ringkasan']}</p>
             
-            for item, checked in checklist_items:
-                if checked:
-                    st.markdown(f"✅ {item}")
-                else:
-                    st.markdown(f"❌ {item}")
-            
-            st.divider()
-            
-            st.subheader("Word Count")
-            total_words = len(st.session_state.cv_data['ringkasan'].split())
-            total_words += sum(len(exp['deskripsi'].split()) for exp in st.session_state.cv_data['pengalaman'])
-            
-            st.metric("Total Words", total_words)
-            
-            if total_words < 300:
-                st.warning("CV might be too short")
-            elif total_words > 800:
-                st.warning("CV might be too long")
-            else:
-                st.success("Good length")
+            <h3 style="background: {base}; color: white; padding: 5px 10px; font-size: 1em; letter-spacing: 1px; margin-top: 20px;">WORK EXPERIENCE</h3>
+            {''.join([f'''
+                <div style="margin-bottom: 15px;">
+                    <div style="display:flex; justify-content:space-between; font-weight:bold;">
+                        <span>{e.get('posisi','')}</span>
+                        <span>{e.get('periode','')}</span>
+                    </div>
+                    <div style="font-style:italic; color: {accent}; margin-bottom: 5px;">{e.get('perusahaan','')}</div>
+                    <div>{e.get('deskripsi','')}</div>
+                </div>
+            ''' for e in data['pengalaman']])}
+        </div>
+        """
 
-# TAB 4: EXPORT
-with tab4:
-    st.header("Export Your CV")
+# --- UI MAIN ---
+st.title("🚀 CV Builder Pro Ultra")
+
+# --- SIDEBAR (Progress & Settings) ---
+with st.sidebar:
+    st.header("📊 CV Health")
+    score = calculate_ats_score(st.session_state.cv_data)
+    st.progress(score/100)
+    st.metric("ATS Score", f"{score}%")
     
-    if not st.session_state.cv_data['personal_info']['nama']:
-        st.warning("Please complete your CV before exporting.")
+    if score < 80:
+        st.warning("⚠️ Tips: Add summary, experience, and at least 5 skills.")
     else:
-        # Format selection
-        st.subheader("Choose Export Format")
+        st.success("✅ Great Job! Your CV looks strong.")
         
-        col_format1, col_format2, col_format3 = st.columns(3)
-        
-        with col_format1:
-            st.markdown("### 📄 PDF")
-            st.markdown("**Best for:**")
-            st.markdown("- Professional applications")
-            st.markdown("- Email attachments")
-            st.markdown("- Printing")
-            
-            try:
-                pdf_file = generate_pdf_enhanced(st.session_state.cv_data, st.session_state.settings)
-                
-                st.download_button(
-                    label="⬇️ Download PDF",
-                    data=pdf_file,
-                    file_name=f"CV_{st.session_state.cv_data['personal_info']['nama'].replace(' ', '_')}.pdf",
-                    mime="application/pdf",
-                    type="primary",
-                    use_container_width=True,
-                    key="download_pdf"
-                )
-            except Exception as e:
-                st.error(f"Error generating PDF: {str(e)}")
-                st.info("Try using a simpler template or check your data.")
-        
-        with col_format2:
-            st.markdown("### 📝 Word (DOCX)")
-            st.markdown("**Best for:**")
-            st.markdown("- Easy editing")
-            st.markdown("- ATS systems")
-            st.markdown("- Further customization")
-            
-            try:
-                docx_file = generate_word_doc(st.session_state.cv_data, st.session_state.settings)
-                
-                st.download_button(
-                    label="⬇️ Download Word",
-                    data=docx_file,
-                    file_name=f"CV_{st.session_state.cv_data['personal_info']['nama'].replace(' ', '_')}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    type="primary",
-                    use_container_width=True,
-                    key="download_docx"
-                )
-            except Exception as e:
-                st.error(f"Error generating Word document: {str(e)}")
-                st.info("Make sure python-docx is installed: pip install python-docx")
-        
-        with col_format3:
-            st.markdown("### 📦 All Formats")
-            st.markdown("**Get everything:**")
-            st.markdown("- PDF + Word")
-            st.markdown("- JSON backup")
-            st.markdown("- Cover letter template")
-            
-            if st.button("🛠️ Create Package", use_container_width=True, key="create_package"):
-                try:
-                    # Create ZIP with all formats
-                    zip_buffer = io.BytesIO()
-                    with zipfile.ZipFile(zip_buffer, 'w') as zip_file:
-                        # Add PDF
-                        pdf_file = generate_pdf_enhanced(st.session_state.cv_data, st.session_state.settings)
-                        zip_file.writestr(
-                            f"CV_{st.session_state.cv_data['personal_info']['nama'].replace(' ', '_')}.pdf",
-                            pdf_file.getvalue()
-                        )
-                        
-                        # Add Word
-                        docx_file = generate_word_doc(st.session_state.cv_data, st.session_state.settings)
-                        zip_file.writestr(
-                            f"CV_{st.session_state.cv_data['personal_info']['nama'].replace(' ', '_')}.docx",
-                            docx_file.getvalue()
-                        )
-                        
-                        # Add JSON backup
-                        json_str = json.dumps(st.session_state.cv_data, indent=2)
-                        zip_file.writestr(
-                            f"CV_Backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                            json_str
-                        )
-                        
-                        # Add cover letter template
-                        cover_letter = f"""
-                        Date: {datetime.now().strftime('%B %d, %Y')}
-                        
-                        Hiring Manager
-                        [Company Name]
-                        [Company Address]
-                        
-                        Dear Hiring Manager,
-                        
-                        I am writing to express my interest in the [Position Name] position at [Company Name]. 
-                        With my background in [Your Field] and experience in [Key Skill], I believe I would be 
-                        a valuable addition to your team.
-                        
-                        In my previous role at [Previous Company], I [Achievement 1]. Additionally, I 
-                        [Achievement 2]. These experiences have equipped me with the skills necessary to 
-                        contribute effectively to [Company Name].
-                        
-                        I have attached my CV for your review and would welcome the opportunity to discuss 
-                        how my skills and experiences align with your needs.
-                        
-                        Sincerely,
-                        {st.session_state.cv_data['personal_info']['nama']}
-                        {st.session_state.cv_data['personal_info']['email']}
-                        {st.session_state.cv_data['personal_info']['telepon']}
-                        """
-                        
-                        zip_file.writestr(
-                            f"Cover_Letter_Template_{st.session_state.cv_data['personal_info']['nama'].replace(' ', '_')}.txt",
-                            cover_letter
-                        )
-                    
-                    zip_buffer.seek(0)
-                    
-                    st.download_button(
-                        label="⬇️ Download Complete Package",
-                        data=zip_buffer,
-                        file_name=f"CV_Package_{st.session_state.cv_data['personal_info']['nama'].replace(' ', '_')}.zip",
-                        mime="application/zip",
-                        type="primary",
-                        use_container_width=True,
-                        key="download_zip"
-                    )
-                except Exception as e:
-                    st.error(f"Error creating package: {str(e)}")
-        
-        st.divider()
-        
-        # Additional export options
-        st.subheader("Additional Options")
-        
-        col_opt1, col_opt2 = st.columns(2)
-        
-        with col_opt1:
-            # Export as JSON for backup
-            json_str = json.dumps(st.session_state.cv_data, indent=2)
-            st.download_button(
-                label="💾 Backup Data (JSON)",
-                data=json_str,
-                file_name=f"CV_Backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json",
-                use_container_width=True,
-                key="download_json"
-            )
-        
-        with col_opt2:
-            # Export as plain text
-            plain_text = f"""
-            CV - {st.session_state.cv_data['personal_info']['nama']}
-            ============================================
-            
-            CONTACT INFORMATION
-            -------------------
-            Name: {st.session_state.cv_data['personal_info']['nama']}
-            Email: {st.session_state.cv_data['personal_info']['email']}
-            Phone: {st.session_state.cv_data['personal_info']['telepon']}
-            Location: {st.session_state.cv_data['personal_info']['alamat']}
-            LinkedIn: {st.session_state.cv_data['personal_info']['linkedin']}
-            
-            PROFESSIONAL SUMMARY
-            --------------------
-            {st.session_state.cv_data['ringkasan']}
-            
-            WORK EXPERIENCE
-            ---------------
-            {chr(10).join([f'- {exp["posisi"]} at {exp["perusahaan"]} ({exp["periode"]})' for exp in st.session_state.cv_data['pengalaman']])}
-            
-            EDUCATION
-            ---------
-            {chr(10).join([f'- {edu["gelar"]} from {edu["institusi"]} ({edu["tahun"]})' for edu in st.session_state.cv_data['pendidikan']])}
-            
-            SKILLS
-            ------
-            {', '.join(st.session_state.cv_data['keahlian'])}
-            
-            LANGUAGES
-            ---------
-            {', '.join(st.session_state.cv_data['bahasa'])}
-            """
-            
-            st.download_button(
-                label="📋 Plain Text Version",
-                data=plain_text,
-                file_name=f"CV_Text_{st.session_state.cv_data['personal_info']['nama'].replace(' ', '_')}.txt",
-                mime="text/plain",
-                use_container_width=True,
-                key="download_txt"
-            )
+    st.divider()
+    if st.button("🗑️ Reset Data", type="primary"):
+        st.session_state.cv_data = {k: (v if k != 'pengalaman' and k != 'pendidikan' and k != 'keahlian' else []) for k, v in st.session_state.cv_data.items()}
+        st.rerun()
 
-# Footer
-st.markdown("---")
-col_footer1, col_footer2, col_footer3 = st.columns(3)
-with col_footer1:
-    st.caption("© 2024 CV Builder Pro Ultra")
-with col_footer2:
-    st.caption("Built with Streamlit & Python")
-with col_footer3:
-    st.caption("v2.0 | Professional Edition")
+# --- MAIN TABS ---
+tab_build, tab_design, tab_preview = st.tabs(["📝 Build Content", "🎨 Design & Style", "📥 Export"])
+
+# 1. BUILD CONTENT
+with tab_build:
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.subheader("Profile Photo")
+        uploaded_file = st.file_uploader("Upload Image", type=['png', 'jpg', 'jpeg'])
+        if uploaded_file:
+            # Convert to base64 for session storage
+            bytes_data = uploaded_file.getvalue()
+            b64_str = base64.b64encode(bytes_data).decode()
+            st.session_state.cv_data['personal_info']['foto'] = b64_str
+            st.success("Photo Uploaded!")
+        
+        if st.session_state.cv_data['personal_info']['foto']:
+             st.image(io.BytesIO(base64.b64decode(st.session_state.cv_data['personal_info']['foto'])), width=150)
+
+    with col2:
+        st.subheader("Personal Info")
+        c1, c2 = st.columns(2)
+        st.session_state.cv_data['personal_info']['nama'] = c1.text_input("Full Name", st.session_state.cv_data['personal_info']['nama'])
+        st.session_state.cv_data['personal_info']['posisi_target'] = c2.text_input("Target Position", st.session_state.cv_data['personal_info']['posisi_target'])
+        st.session_state.cv_data['personal_info']['email'] = c1.text_input("Email", st.session_state.cv_data['personal_info']['email'])
+        st.session_state.cv_data['personal_info']['telepon'] = c2.text_input("Phone", st.session_state.cv_data['personal_info']['telepon'])
+        st.session_state.cv_data['personal_info']['alamat'] = st.text_input("Address", st.session_state.cv_data['personal_info']['alamat'])
+
+    st.subheader("Summary")
+    st.session_state.cv_data['ringkasan'] = st.text_area("Professional Summary", st.session_state.cv_data['ringkasan'], height=100)
+
+    st.subheader("Work Experience")
+    if st.button("➕ Add Job"):
+        st.session_state.cv_data['pengalaman'].append({})
+    
+    for i, exp in enumerate(st.session_state.cv_data['pengalaman']):
+        with st.expander(f"Job #{i+1} - {exp.get('posisi', 'New Position')}", expanded=True):
+            c1, c2 = st.columns(2)
+            exp['posisi'] = c1.text_input(f"Position #{i}", exp.get('posisi', ''))
+            exp['perusahaan'] = c2.text_input(f"Company #{i}", exp.get('perusahaan', ''))
+            exp['periode'] = st.text_input(f"Period #{i}", exp.get('periode', ''))
+            exp['deskripsi'] = st.text_area(f"Description #{i}", exp.get('deskripsi', ''))
+            if st.button(f"Delete Job #{i}"):
+                st.session_state.cv_data['pengalaman'].pop(i)
+                st.rerun()
+
+    st.subheader("Skills")
+    skills_txt = st.text_area("Skills (comma separated)", ", ".join(st.session_state.cv_data['keahlian']))
+    st.session_state.cv_data['keahlian'] = [s.strip() for s in skills_txt.split(",") if s.strip()]
+    
+    st.subheader("Education")
+    if st.button("➕ Add Education"):
+        st.session_state.cv_data['pendidikan'].append({})
+    for i, edu in enumerate(st.session_state.cv_data['pendidikan']):
+        with st.expander(f"Education #{i+1}", expanded=True):
+            c1, c2 = st.columns(2)
+            edu['institusi'] = c1.text_input(f"School/Uni #{i}", edu.get('institusi', ''))
+            edu['gelar'] = c2.text_input(f"Degree #{i}", edu.get('gelar', ''))
+            edu['tahun'] = st.text_input(f"Year #{i}", edu.get('tahun', ''))
+
+# 2. DESIGN
+with tab_design:
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Layout")
+        layout = st.radio("Choose Layout", list(LAYOUTS.keys()), format_func=lambda x: LAYOUTS[x]['name'])
+        st.session_state.settings['template_style'] = layout
+        
+        st.subheader("Fonts")
+        font = st.selectbox("Font Family", list(FONTS.keys()))
+        st.session_state.settings['font_family'] = font
+
+    with c2:
+        st.subheader("Theme Colors")
+        base = st.color_picker("Primary Color", st.session_state.settings['base_color'])
+        st.session_state.settings['base_color'] = base
+        
+        accent = st.color_picker("Accent Color", st.session_state.settings['accent_color'])
+        st.session_state.settings['accent_color'] = accent
+
+# 3. EXPORT
+with tab_preview:
+    st.subheader("Live Preview")
+    html_prev = get_html_preview(st.session_state.cv_data, st.session_state.settings)
+    st.components.v1.html(html_prev, height=800, scrolling=True)
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Download PDF")
+        if st.button("📄 Generate PDF"):
+            pdf_data = generate_pdf_enhanced(st.session_state.cv_data, st.session_state.settings)
+            st.download_button("⬇️ Download PDF", pdf_data, file_name="my_cv.pdf", mime="application/pdf", type='primary')
+            
+    with c2:
+        st.subheader("Download Word (Editable)")
+        if st.button("📝 Generate Word"):
+            try:
+                docx_data = generate_word_doc(st.session_state.cv_data, st.session_state.settings)
+                st.download_button("⬇️ Download Word", docx_data, file_name="my_cv.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", type='primary')
+            except Exception as e:
+                st.error(f"Error generating Word: {e}")
