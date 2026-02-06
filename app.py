@@ -379,8 +379,9 @@ def generate_pdf_enhanced(data, settings):
             skills_text = ", ".join(data['keahlian'][:15])
             pdf.multi_cell(0, 5, skills_text)
     
-    pdf_bytes = pdf.output(dest='S')  # 'S' = return as bytes string
+    pdf_bytes = pdf.output(dest='S')
     buffer = io.BytesIO(pdf_bytes)
+    buffer.seek(0)
     return buffer
 
 # --- WORD DOCX GENERATOR ---
