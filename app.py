@@ -406,8 +406,9 @@ def generate_word_doc(data, settings):
     else:
         generate_word_modern(doc, data, settings)
     
-    buffer = io.BytesIO()
-    doc.save(buffer)
+    pdf_str = pdf.output(dest='S')
+    pdf_bytes = pdf_str.encode('latin1')
+    buffer = io.BytesIO(pdf_bytes)
     buffer.seek(0)
     return buffer
 
